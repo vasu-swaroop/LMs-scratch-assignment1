@@ -74,7 +74,18 @@ class PreTokenRegistry():
             r"\s+"
         ]
         self.regex_split_pattern = "|".join(parts)
-        self._lock = Lock()
+    #     self._lock = Lock()
+
+    # def __getstate__(self):
+    #     state = self.__dict__.copy()
+    #     # Remove lock, it cannot be pickled
+    #     del state['_lock']
+    #     return state
+
+    # def __setstate__(self, state):
+    #     self.__dict__.update(state)
+    #     # Restore lock
+    #     self._lock = Lock()
         
     def populate_pre_token(self, num_process=4, num_chunks=2000):
         with open(self.corpus_path, 'rb') as f:
@@ -94,13 +105,11 @@ class PreTokenRegistry():
 
         # Create PreToken entries sequentially
         for text, freq in tqdm(global_counter.items(), desc="Creating PreTokens"):
-
             if text not in self.pre_token_freq_dict:
                 self.create_pre_token_entry(text)
             self.pre_token_freq_dict[text].freq = freq
           
         assert all([x in global_counter.keys() for x  in self.separating_tokens]) , "Wrong separating token added"
-
     def remove_sep_pattern(self):
         for text in self.separating_tokens:
             self.pre_token_freq_dict.pop(text) 
@@ -108,19 +117,18 @@ class PreTokenRegistry():
     def create_pre_token_entry(self, text: str):
         byte_sequence = text.encode()
 
-        with self._lock:
-            if text in self.pre_token_freq_dict:
-                return
-            pre_token_idx = len(self.pre_token_freq_dict)
-            token_list=[]
-            for tok in byte_sequence:
-                token_list.append(Token(token_idx=int(tok), byte_arr=bytes([tok]), token_freq=None))
+        if text in self.pre_token_freq_dict:
+            return
+        pre_token_idx = len(self.pre_token_freq_dict)
+        token_list=[]
+        for tok in byte_sequence:
+            token_list.append(Token(token_idx=int(tok), byte_arr=bytes([tok]), token_freq=None))
 
-            self.pre_token_freq_dict[text] = PreToken(
-                pre_token_idx=pre_token_idx,
-                token_arr=token_list,
-                freq=0
-            )
+        self.pre_token_freq_dict[text] = PreToken(
+            pre_token_idx=pre_token_idx,
+            token_arr=token_list,
+            freq=0
+        )
 
     def list_pre_tokens(self)->list[PreToken]:
         return self.pre_token_freq_dict.values()
