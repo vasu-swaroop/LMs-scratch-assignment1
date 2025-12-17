@@ -14,12 +14,13 @@ def main():
     base_dir = Path(__file__).resolve().parent.parent
     data_path = base_dir / 'data' / 'owt_valid.txt'
     
-    config = TokenizerConfig(corpus_path=data_path, vocab_size=300)
+    config = TokenizerConfig(corpus_path=data_path, vocab_size=10000)
     tokenizer = Tokenizer(config=config)
     
     print(f"Using corpus path: {data_path}")
     print("Starting Tokenizer Training...")
     tokenizer.train_tokenizer()
+    print(tokenizer.print_sample_results())
     print("Tokenizer Training Completed.")
 
 if __name__ == "__main__":
