@@ -5,14 +5,14 @@ from jaxtyping import Float, Array
 
 from schemas import Activation
 
-class Linear(nn.Module):
+class FFN(nn.Module):
     weights: list[int]
     activation: Activation
 
     @nn.compact
     def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False)->Float[Array, 'B ... D_out']:
         for weight in self.weights[:-1]:
-            x = nn.Dense(weight, use_bias=True,)(x)
+            x = nn.Dense(weight, use_bias=True)(x)
             x = self.activation(x)
         x =nn.Dense(self.weights[-1])(x)
         if last_layer_act:
@@ -53,6 +53,77 @@ class Attention(nn.Module):
         return attention
 
 
+class MLA(nn.Module):
+    '''Currently implementing non rope, non kv cache implementation'''
+    latent_dim:int
+    hidden_dim:int
+    num_heads: int
+    model_dim: int
+    @nn.compact
+    def to_kv_tokens(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
+        cache = nn.Dense(self.latent_dim)(x) # 'B S d'
+        x = nn.Dense(self.num_heads*self.hidden_dim)(cache) # 'B S H*D'
+        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
+        return x, cache
+    
+    @nn.compact
+    def to_q_tokens(self,x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
+        x = nn.Dense(self.hidden_dim*self.num_heads)(x)
+        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
+        return x
+
+    @nn.compact
+    def __call__(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S M']:
+        kv_concat=jnp.stack([x,x], axis=0)
+        kv_tokens, kv_cache=jax.vmap(self.to_kv_tokens)(kv_concat) #TODO: implement KV cache
+        k_tokens, v_tokens= jnp.split(kv_tokens,2, axis=0)
+        k_tokens, v_tokens= k_tokens[0], v_tokens[0]
+
+        q_tokens= self.to_q_tokens(x)
+        
+        attention=Attention(self.hidden_dim)(q_tokens, k_tokens, v_tokens)
+        
+        #Concatenate the multiple heads
+        attention= jnp.reshape(attention, (attention.shape[0],attention.shape[1], self.num_heads* self.hidden_dim))
+
+        #Up project
+        out_token=nn.Dense(self.model_dim)(attention)
+        return out_token
+
+
+''' Inpsired from https://arxiv.org/pdf/2412.19437'''
+class TransformerBLock(nn.Module):
+    latent_dim:int
+    hidden_dim:int
+    num_heads: int
+    model_dim:int
+    activation: Activation
+
+    @nn.compact
+    def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
+        stream=x
+        x=RMSNorm()(x)
+        x=MLA(latent_dim=self.latent_dim, hidden_dim=self.hidden_dim, num_heads=self.num_heads, model_dim=self.model_dim)(x)
+        stream=x+stream
+        x=RMSNorm()(stream)
+        x=FFN(weights=[self.model_dim, self.model_dim*4, self.model_dim], activation=self.activation)(x,last_layer_act=True)
+        stream=x+stream
+        return stream
+
+
+def test_transformer_forward():
+    print("Testing Transformer")
+
+    rng=jax.random.PRNGKey(42)
+    inp =jnp.ones((7,6,4096))
+    transformer_block=TransformerBLock(latent_dim=256, hidden_dim=512, num_heads=8, model_dim=4096, activation=Activation.RELU)
+    model_params=transformer_block.init(rng, inp)
+    out= transformer_block.apply(model_params, inp)
+    print(out)
+    print(out.shape)
+
+    #TODO: Add an assert, and mathematically compare what will be the value of MLA Transformer when all input is 1
+
 def test_attetnion_forward():
     print("Tessting atte4ntion")
     attn=Attention(hidden_dim=512)
@@ -64,8 +135,8 @@ def test_attetnion_forward():
     print(out.shape)
 
 def test_mlp_forward():
-    print("Testing Linear Layers")
-    mlp=Linear(weights=[128,64,32,16], activation=Activation.RELU)
+    print("Testing FFN Layers")
+    mlp=FFN(weights=[128,64,32,16], activation=Activation.RELU)
     rng=jax.random.PRNGKey(42)
     inp=jnp.ones((1000,128))
     model_var=mlp.init(rng,inp)
@@ -74,4 +145,4 @@ def test_mlp_forward():
     print(out.shape)
 
 if __name__== "__main__":
-    test_attetnion_forward()
+    test_transformer_forward()
