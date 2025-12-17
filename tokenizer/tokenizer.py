@@ -14,15 +14,18 @@ class TokenizerConfig:
     token_dict: dict[int,bytes]= field(default_factory=dict)
     train_steps: int =0 
     pretokeinzed_corpus_path: Path= Path('../data/owt_train_pretokenized.pkl') 
+    separating_token: list[str] = field(default_factory=lambda: ['<|endoftext|>'])
 
 class Tokenizer():
     def __init__(self, config: TokenizerConfig = None):
         self.config: TokenizerConfig= config if config is not None else TokenizerConfig()
         self.token_pair_registry: TokenPairRegistry= TokenPairRegistry()
         self.token_registery: TokenRegistery= TokenRegistery()
-        self.pre_token_registery: PreTokenRegistry= PreTokenRegistry(self.config.corpus_path)
+        self.pre_token_registery: PreTokenRegistry= PreTokenRegistry(self.config.corpus_path, self.config.separating_token)
+
     def run_pretokenization(self, num_processes=4):
         self.pre_token_registery.populate_pre_token(num_processes)
+        self.pre_token_registery.remove_sep_pattern() # We remove in pre_token_reg such that it doesn't get considered for the token_pair update
         #TODO: Add caching mechanism
 
     def observe_token_pair(self, token_A:Token, token_B:Token, pre_token: PreToken, count_pre_token: int):
@@ -37,6 +40,29 @@ class Tokenizer():
                 token_A,token_B= token_arr[token_idx], token_arr[token_idx+1]
                 self.token_pair_registry.observe(token_A, token_B, pre_token, count_pre_token)
 
+    
+    def _unobserve_if_exists(self, A: Token, B: Token, pre_token: PreToken, freq: int, deleted_A: Token, deleted_B: Token):
+        """Safely un-observes a pair, checking existence and avoiding the deleted pair."""
+        if not A or not B:
+            return
+            
+        # Optimization: Don't check for the pair we know we just deleted
+        if A == deleted_A and B == deleted_B:
+            return
+
+        # Safety: Only un-observe if it's actually in the registry
+        if (A, B) in self.token_pair_registry._pairs:
+            self.token_pair_registry.un_observe(A, B, pre_token, freq)
+
+    def update_the_pair_post_merge(self, token_A:Token, token_B:Token, following:Token, preceeding:Token, pre_token: PreToken, pre_token_freq: int, new_token: Token):
+        # Un-observe neighbors safely
+        self._unobserve_if_exists(preceeding, token_A, pre_token, pre_token_freq, token_A, token_B)
+        self._unobserve_if_exists(token_B, following, pre_token, pre_token_freq, token_A, token_B)
+
+        # Always observe the new pairs formed with the new merged token
+        self.token_pair_registry.observe(preceeding, new_token, pre_token, pre_token_freq)
+        self.token_pair_registry.observe(new_token, following, pre_token, pre_token_freq)
+
     def merge_most_frequent_token_pair(self):
         token_pair_metadata=self.token_pair_registry.get_most_frequent_token_pair()
         
@@ -49,7 +75,7 @@ class Tokenizer():
         # Create a new token
         merged_bytes=token_A.byte_arr+token_B.byte_arr
         new_token= self.token_registery.add_tokens(merged_bytes, token_pair_metadata.token_pair_count) 
-
+        
         # Update the PreTokenFreq list of pretokens using pretoken registery
         for pre_token in token_pair_list:
             preceeding, following= pre_token.modify_pre_token_rep(new_token, token_A, token_B)    
@@ -58,10 +84,8 @@ class Tokenizer():
             # print()
 
             # Add if the preceding and following not in the pre_token anymore post merging, remove pre_token from the token_pair list
-            self.token_pair_registry.un_observe(preceeding, token_A,pre_token, pre_token_freq)
-            self.token_pair_registry.un_observe(token_B, following,pre_token, pre_token_freq)
-            self.token_pair_registry.observe(preceeding, new_token,pre_token, pre_token_freq)
-            self.token_pair_registry.observe(new_token, following,pre_token, pre_token_freq)
+            self.update_the_pair_post_merge(token_A, token_B, following, preceeding, pre_token, pre_token_freq, new_token)
+        
     def save_tokenizer(self):
         import pickle
         with open("token_pair.pkl", "wb") as f:
@@ -81,8 +105,9 @@ class Tokenizer():
                  # token is a base token (freq=None)
                  counter[token.token_idx] += pre_token.freq
                  
-        self.token_registery.default_init(counter=counter)
+        self.token_registery.default_init(counter=counter, special_tokens=self.config.separating_token)
         self.initialize_token_pair()
+
         current_vocab_size=self.token_registery.num_tokens
         from tqdm import tqdm
         pbar = tqdm(total=self.config.vocab_size - current_vocab_size)

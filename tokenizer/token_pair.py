@@ -41,8 +41,7 @@ class TokenPairRegistry:
         if not A or not B:
             return 
         key = (A, B)
-
-        assert key in self._pairs, "Wrong implementation" #Jsut to debug
+        assert key in self._pairs, "Wrong implementation" #Just to debug
         
         self._pairs[key].reduce_count(count)
         if not pre_token.find_pair(*key) and pre_token in self._pairs[key].pre_token_list:
@@ -50,7 +49,7 @@ class TokenPairRegistry:
 
         if self._pairs[key].token_pair_count==0:
             # print(key, self._pairs[key].token_pair_count)
-            del self._pairs[key]
+            self._pairs.pop(key)
 
     def get_most_frequent_token_pair(self)->TokenPairMetadata:
         token_pair_metadata=max(self._pairs.values(), key=lambda x:x.token_pair_count)
