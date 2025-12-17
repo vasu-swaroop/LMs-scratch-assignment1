@@ -2,9 +2,9 @@
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
 from pathlib import Path
-from pre_tokenization import PreToken, PreTokenRegistry
-from tokens import Token, TokenRegistery
-from token_pair import TokenPairRegistry
+from .pre_tokenization import PreToken, PreTokenRegistry
+from .tokens import Token, TokenRegistery
+from .token_pair import TokenPairRegistry
 from joblib import Parallel, delayed
 @dataclass
 class TokenizerConfig:
@@ -97,6 +97,7 @@ class Tokenizer():
     def print_sample_results(self):
         from pprint import pprint as pp
         pp(self.token_registery._tokens)
+        
     def train_tokenizer(self):
         import time
         stats = []

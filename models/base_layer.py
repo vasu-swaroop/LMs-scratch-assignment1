@@ -3,7 +3,7 @@ from jax import numpy as jnp
 import jax
 from jaxtyping import Float, Array
 
-from schemas import Activation
+from .schemas import Activation
 
 class FFN(nn.Module):
     weights: list[int]
@@ -51,7 +51,7 @@ class Attention(nn.Module):
         softmax_scores= nn.softmax(similarity,axis=-1) # B S H D D
         attention = softmax_scores @ v # B S H D
         return attention
-
+    #TODO: Add masking for causal inference as well
 
 class MLA(nn.Module):
     '''Currently implementing non rope, non kv cache implementation'''
@@ -91,24 +91,6 @@ class MLA(nn.Module):
         return out_token
 
 
-''' Inpsired from https://arxiv.org/pdf/2412.19437'''
-class TransformerBLock(nn.Module):
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
-    model_dim:int
-    activation: Activation
-
-    @nn.compact
-    def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
-        stream=x
-        x=RMSNorm()(x)
-        x=MLA(latent_dim=self.latent_dim, hidden_dim=self.hidden_dim, num_heads=self.num_heads, model_dim=self.model_dim)(x)
-        stream=x+stream
-        x=RMSNorm()(stream)
-        x=FFN(weights=[self.model_dim, self.model_dim*4, self.model_dim], activation=self.activation)(x,last_layer_act=True)
-        stream=x+stream
-        return stream
 
 
 def test_transformer_forward():
@@ -125,7 +107,8 @@ def test_transformer_forward():
     #TODO: Add an assert, and mathematically compare what will be the value of MLA Transformer when all input is 1
 
 def test_attetnion_forward():
-    print("Tessting atte4ntion")
+    print("Tessting attention")
+
     attn=Attention(hidden_dim=512)
     rng=jax.random.PRNGKey(42)
     inp =jnp.ones((1000,100,10,512))
