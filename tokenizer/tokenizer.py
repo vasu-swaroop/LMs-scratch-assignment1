@@ -5,7 +5,7 @@ from pathlib import Path
 from pre_tokenization import PreToken, PreTokenRegistry
 from tokens import Token, TokenRegistery
 from token_pair import TokenPairRegistry
-
+from joblib import Parallel, delayed
 @dataclass
 class TokenizerConfig:
     vocab_size: int= 65536  
@@ -15,6 +15,7 @@ class TokenizerConfig:
     train_steps: int =0 
     pretokeinzed_corpus_path: Path= Path('../data/owt_train_pretokenized.pkl') 
     separating_token: list[str] = field(default_factory=lambda: ['<|endoftext|>'])
+    stats_file: Path = Path('tokenizer_timing_stats.txt')
 
 class Tokenizer():
     def __init__(self, config: TokenizerConfig = None):
@@ -63,6 +64,14 @@ class Tokenizer():
         self.token_pair_registry.observe(preceeding, new_token, pre_token, pre_token_freq)
         self.token_pair_registry.observe(new_token, following, pre_token, pre_token_freq)
 
+    def update_pre_tokens(self,pre_token:PreToken, new_token:Token, token_A:Token, token_B:Token, ):
+        preceeding, following= pre_token.modify_pre_token_rep(new_token, token_A, token_B)    
+        pre_token_freq=pre_token.get_freq()
+        # print("new_token",new_token,"merging", token_A, token_B, "with f as",following, "with count as ",pre_token_freq)
+        # print()
+        # Add if the preceding and following not in the pre_token anymore post merging, remove pre_token from the token_pair list
+        self.update_the_pair_post_merge(token_A, token_B, following, preceeding, pre_token, pre_token_freq, new_token)
+
     def merge_most_frequent_token_pair(self):
         token_pair_metadata=self.token_pair_registry.get_most_frequent_token_pair()
         
@@ -76,38 +85,49 @@ class Tokenizer():
         merged_bytes=token_A.byte_arr+token_B.byte_arr
         new_token= self.token_registery.add_tokens(merged_bytes, token_pair_metadata.token_pair_count) 
         
-        # Update the PreTokenFreq list of pretokens using pretoken registery
-        for pre_token in token_pair_list:
-            preceeding, following= pre_token.modify_pre_token_rep(new_token, token_A, token_B)    
-            pre_token_freq=pre_token.get_freq()
-            # print("new_token",new_token,"merging", token_A, token_B, "with f as",following, "with count as ",pre_token_freq)
-            # print()
-
-            # Add if the preceding and following not in the pre_token anymore post merging, remove pre_token from the token_pair list
-            self.update_the_pair_post_merge(token_A, token_B, following, preceeding, pre_token, pre_token_freq, new_token)
-        
+        # Update the PreTokenFreq list of pretokens using pretoken registery        
+        for pre_tokens in token_pair_list: 
+            self.update_pre_tokens(pre_tokens, new_token, token_A, token_B)    
+             
     def save_tokenizer(self):
         import pickle
-        with open("token_pair.pkl", "wb") as f:
-            pickle.dump(self.token_registery, f)
+        with open("tokenizer.pkl", "wb") as f:
+            pickle.dump(self, f)
         
     def print_sample_results(self):
         from pprint import pprint as pp
         pp(self.token_registery._tokens)
     def train_tokenizer(self):
+        import time
+        stats = []
+        
+        start_time = time.time()
+        print("Starting Pre-tokenization...")
         self.run_pretokenization()
+        pretok_time = time.time() - start_time
+        stats.append(f"Pre-tokenization: {pretok_time:.2f}s")
         
         # Calculate base token frequencies
+        start_time = time.time()
+        print("Calculating Base Frequencies...")
         counter = Counter()
         from tqdm import tqdm
         for pre_token in tqdm(self.pre_token_registery.list_pre_tokens(), desc="Calculating Base Frequencies"):
              for token in pre_token.token_arr:
                  # token is a base token (freq=None)
                  counter[token.token_idx] += pre_token.freq
+        freq_time = time.time() - start_time
+        stats.append(f"Base Frequency Calculation: {freq_time:.2f}s")
                  
+        start_time = time.time()
+        print("Initializing Token Pairs...")
         self.token_registery.default_init(counter=counter, special_tokens=self.config.separating_token)
         self.initialize_token_pair()
+        init_pair_time = time.time() - start_time
+        stats.append(f"Token Pair Initialization: {init_pair_time:.2f}s")
 
+        print("Starting Merge Loop...")
+        start_time = time.time()
         current_vocab_size=self.token_registery.num_tokens
         from tqdm import tqdm
         pbar = tqdm(total=self.config.vocab_size - current_vocab_size)
@@ -117,4 +137,16 @@ class Tokenizer():
             pbar.update(1)
             pbar.set_description(f"Vocab size: {current_vocab_size}")
         pbar.close()
+        merge_time = time.time() - start_time
+        stats.append(f"Merge Loop: {merge_time:.2f}s")
+
+        start_time = time.time()
+        print("Saving Tokenizer...")
         self.save_tokenizer()
+        save_time = time.time() - start_time
+        stats.append(f"Saving Tokenizer: {save_time:.2f}s")
+        
+        # Save stats to file
+        with open(self.config.stats_file, 'w') as f:
+            f.write("\n".join(stats))
+        print(f"Timing stats saved to {self.config.stats_file}")
