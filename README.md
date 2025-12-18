@@ -1,3 +1,14 @@
+# **AI DECLARATION: PARTS OF THIS PROJECT, INCLUDING CODE AND DOCUMENTATION, WERE CREATED WITH AI ASSISTANCE**
+
+**Project Goal: To learn and implement low-level functional programming and implement a Language Model.**
+
+**Hand-Written vs. AI Augmented:**
+The core logic is manually implemented to maximize learning. AI assistance was used specifically for:
+1. Adding logging and `tqdm` progress bars.
+2. Fixing typing inconsistencies and naming bugs.
+3. Ideation on how to hash/tuple token pairs and hashing dataclasses.
+4. Adding time logging.
+
 # CS336 Spring 2025 Assignment 1: Basics
 
 For a full description of the assignment, see the assignment handout at

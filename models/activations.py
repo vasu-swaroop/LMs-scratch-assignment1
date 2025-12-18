@@ -1,0 +1,1 @@
+'''Write every activation function in this file, assert on data that the values are close enough'''
