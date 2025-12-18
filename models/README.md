@@ -1,0 +1,1 @@
+Attempting to write the model forward pass in jax using Haiku

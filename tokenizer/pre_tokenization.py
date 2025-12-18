@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 from joblib import Parallel, delayed
 from threading import Lock
-from tokens import Token
+from .tokens import Token
 from collections import Counter
-from utils import find_chunk_boundaries
+from .utils import find_chunk_boundaries
 
 def process_chunk(corpus_path: str, start: int, end: int, regex_pattern: str) -> Counter:
     counts = Counter()

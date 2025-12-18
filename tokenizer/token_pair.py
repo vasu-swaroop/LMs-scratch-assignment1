@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
-from tokens import Token
-from pre_tokenization import PreToken
+from .tokens import Token
+from .pre_tokenization import PreToken
 
 @dataclass
 class TokenPairMetadata:
