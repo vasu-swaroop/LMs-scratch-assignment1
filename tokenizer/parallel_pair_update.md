@@ -1,1 +1,0 @@
-Parallelize the update step

@@ -9,6 +9,8 @@ The core logic is manually implemented to maximize learning. AI assistance was u
 3. Ideation on how to hash/tuple token pairs and hashing dataclasses.
 4. Adding time logging.
 
+**Also adding a bugs_and_ideas.md file in all directory to keep a track of ideas explored and problems faced**
+
 # CS336 Spring 2025 Assignment 1: Basics
 
 For a full description of the assignment, see the assignment handout at
