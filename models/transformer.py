@@ -22,14 +22,11 @@ class TransformerBlock(nn.Module):
     def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
         stream=x
         x=RMSNorm()(x)
-        print(x.shape)
         x=MLA(latent_dim=self.latent_dim, hidden_dim=self.hidden_dim, num_heads=self.num_heads, model_dim=self.model_dim)(x)
         stream=x+stream
         x=RMSNorm()(stream)
-        print(x.shape)
         x=FFN(weights=[self.model_dim, self.model_dim*4, self.model_dim], activation=self.activation)(x,last_layer_act=True)
         stream=x+stream
-        print(stream.shape, "final")
         return stream, 1
 
 
@@ -100,12 +97,12 @@ class DeepSeekModel(nn.Module):
 
 def test_transformer_forward():
     model_config=ModelConfig(   
-        latent_dim=5,
-        hidden_dim=5,
+        latent_dim=8,
+        hidden_dim=4096,
         num_heads=5, 
-        model_dim=5,
+        model_dim=4096,
         activation= Activation.RELU,
-        transformer_depth=1,
+        transformer_depth=10,
         vocab_length=10)
 
     tokenizer= Tokenizer()

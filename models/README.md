@@ -1,1 +1,1 @@
-Attempting to write the model forward pass in jax using Haikucd ../../f
+Attempting to write the model forward pass in jax using Haiku
