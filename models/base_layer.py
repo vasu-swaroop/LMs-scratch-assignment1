@@ -42,6 +42,34 @@ def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> 
 
    return jnp.matmul(x, y)
 
+
+class pos_to_freq(nn.Module):
+    model_dim:int
+
+    @nn.compact
+    def __call__(self, pos:Float[Array, 'B S']):
+        freq=-2*pos/self.model_dim
+        freq= 10000**freq
+        return freq  
+
+class Rope(nn.Module):
+    model_dim:int
+
+    @nn.compact
+    def __call__(self, x:Float[Array, 'B S H D'], pos:Float[Array, 'S'])-> Float[Array, 'B S H D']:
+        pos=pos_to_freq(self.model_dim)(pos[None,:])
+        cos_pos=jnp.cos(pos)[:,:,None,None] # B S 
+        sin_pos=jnp.sin(pos)[:,:,None,None]
+        half_dim=x.shape[-1]//2
+
+        even=x[:,:,:,:half_dim] # 'B S H D//2'
+        odd= x[:,:,:,half_dim:]
+        assert even.shape[-1]==odd.shape[-1]
+
+        even_=even * cos_pos - odd * sin_pos # 'B S H D//2'
+        odd_=even * cos_pos + odd * sin_pos
+
+        return jnp.concat([even_, odd_], axis=-1)
 class Attention(nn.Module):
     hidden_dim: int
     @nn.compact
@@ -127,5 +155,16 @@ def test_mlp_forward():
     out=mlp.apply(model_var, inp)     
     print(out.shape)
 
+def test_rope_forward():
+    print("testing rope")
+    rope=Rope(12312312)
+    inp_seq=jnp.ones((15,14,12,34))
+    inp_pos=jnp.arange(0,14)
+
+    var=rope.init(jax.random.PRNGKey(42), inp_seq, inp_pos)
+    out=rope.apply(var, inp_seq, inp_pos)
+
+    print(out.shape)
+
 if __name__== "__main__":
-    test_transformer_forward()
+    test_rope_forward()
