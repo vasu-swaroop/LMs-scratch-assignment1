@@ -70,6 +70,7 @@ class Rope(nn.Module):
         odd_=even * cos_pos + odd * sin_pos
 
         return jnp.concat([even_, odd_], axis=-1)
+
 class Attention(nn.Module):
     hidden_dim: int
     @nn.compact
@@ -80,44 +81,6 @@ class Attention(nn.Module):
         attention = softmax_scores @ v # B S H D
         return attention
     #TODO: Add masking for causal inference as well
-
-class MLA(nn.Module):
-    '''Currently implementing non rope, non kv cache implementation'''
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
-    model_dim: int
-    @nn.compact
-    def to_kv_tokens(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
-        cache = nn.Dense(self.latent_dim)(x) # 'B S d'
-        x = nn.Dense(self.num_heads*self.hidden_dim)(cache) # 'B S H*D'
-        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
-        return x, cache
-    
-    @nn.compact
-    def to_q_tokens(self,x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
-        x = nn.Dense(self.hidden_dim*self.num_heads)(x)
-        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
-        return x
-
-    @nn.compact
-    def __call__(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S M']:
-        kv_concat=jnp.stack([x,x], axis=0)
-        kv_tokens, kv_cache=jax.vmap(self.to_kv_tokens)(kv_concat) #TODO: implement KV cache
-        k_tokens, v_tokens= jnp.split(kv_tokens,2, axis=0)
-        k_tokens, v_tokens= k_tokens[0], v_tokens[0]
-
-        q_tokens= self.to_q_tokens(x)
-        
-        attention=Attention(self.hidden_dim)(q_tokens, k_tokens, v_tokens)
-        
-        #Concatenate the multiple heads
-        attention= jnp.reshape(attention, (attention.shape[0],attention.shape[1], self.num_heads* self.hidden_dim))
-
-        #Up project
-        out_token=nn.Dense(self.model_dim)(attention)
-        return out_token
-
 
 
 

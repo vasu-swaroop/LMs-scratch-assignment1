@@ -10,6 +10,18 @@ class Activation(Enum):
     def __call__(self, x):
         return self.value(x)
 
+@dataclass
+class MLA_config():
+    latent_dim_q:int
+    latent_dim_kv:int
+    dim_content: int
+    dim_pos: int
+    rope: bool
+    num_heads: int
+
+    @property
+    def hidden_dim(self):
+        return self.dim_content + self.dim_pos
 
 @dataclass
 class ModelConfig:
