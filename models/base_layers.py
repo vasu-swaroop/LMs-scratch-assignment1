@@ -1,7 +1,7 @@
 from flax import linen as nn 
 from jax import numpy as jnp
 import jax
-from jaxtyping import Float, Array
+from jaxtyping import Float, Array, Int
 
 from .schemas import Activation
 
@@ -45,27 +45,27 @@ def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> 
 
 class pos_to_freq(nn.Module):
     model_dim:int
-
     @nn.compact
-    def __call__(self, pos:Float[Array, 'B S']):
+    def __call__(self, pos:Int[Array, 'B S']):
         freq=-2*pos/self.model_dim
         freq= 10000**freq
         return freq  
 
 class Rope(nn.Module):
     model_dim:int
-
     @nn.compact
-    def __call__(self, x:Float[Array, 'B S H D'], pos:Float[Array, 'S'])-> Float[Array, 'B S H D']:
-        pos=pos_to_freq(self.model_dim)(pos[None,:])
-        cos_pos=jnp.cos(pos)[:,:,None,None] # B S 
-        sin_pos=jnp.sin(pos)[:,:,None,None]
+    def __call__(self, x:Float[Array, '... D'], pos:Float[Array, 'S'])-> Float[Array, '... D']:        
+        pos=pos_to_freq(self.model_dim)(pos)
+        pos=pos[:,:,None]
+
+        cos_pos=jnp.cos(pos)
+        sin_pos=jnp.sin(pos)
+
         half_dim=x.shape[-1]//2
+        even=x[...,:half_dim] # 'B S H D//2' or  B S D//2
+        odd= x[...,:,half_dim:]
 
-        even=x[:,:,:,:half_dim] # 'B S H D//2'
-        odd= x[:,:,:,half_dim:]
         assert even.shape[-1]==odd.shape[-1]
-
         even_=even * cos_pos - odd * sin_pos # 'B S H D//2'
         odd_=even * cos_pos + odd * sin_pos
 
@@ -82,20 +82,6 @@ class Attention(nn.Module):
         return attention
     #TODO: Add masking for causal inference as well
 
-
-
-def test_transformer_forward():
-    print("Testing Transformer")
-
-    rng=jax.random.PRNGKey(42)
-    inp =jnp.ones((7,6,4096))
-    transformer_block=TransformerBLock(latent_dim=256, hidden_dim=512, num_heads=8, model_dim=4096, activation=Activation.RELU)
-    model_params=transformer_block.init(rng, inp)
-    out= transformer_block.apply(model_params, inp)
-    print(out)
-    print(out.shape)
-
-    #TODO: Add an assert, and mathematically compare what will be the value of MLA Transformer when all input is 1
 
 def test_attetnion_forward():
     print("Tessting attention")
