@@ -16,18 +16,11 @@ class MLA_config():
     latent_dim_kv:int
     dim_content: int
     dim_pos: int
-    rope: bool
     num_heads: int
-
-    @property
-    def hidden_dim(self):
-        return self.dim_content + self.dim_pos
 
 @dataclass
 class ModelConfig:
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
+    mla_config: MLA_config
     model_dim:int
     activation: Activation
     transformer_depth: int

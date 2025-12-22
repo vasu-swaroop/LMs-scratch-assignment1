@@ -1,10 +1,11 @@
-from .base_layer import RMSNorm, MLA, FFN
+from models.base_layers import RMSNorm,FFN
+from models.attention import MLA_rope 
 from flax import linen as nn
 from jaxtyping import Float, Array, PRNGKeyArray, Int
 from typing import Union
 from tokenizer.tokens import Token
 from tokenizer.tokenizer import Tokenizer
-from .schemas import ModelConfig, Activation
+from models.schemas import ModelConfig, Activation, MLA_config
 from jax import numpy as jnp
 import jax
 
@@ -12,9 +13,7 @@ from pathlib import Path
 
 ''' Inpsired from https://arxiv.org/pdf/2412.19437'''
 class TransformerBlock(nn.Module):
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
+    mla_config: MLA_config
     model_dim:int
     activation: Activation
 
@@ -22,7 +21,9 @@ class TransformerBlock(nn.Module):
     def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
         stream=x
         x=RMSNorm()(x)
-        x=MLA(latent_dim=self.latent_dim, hidden_dim=self.hidden_dim, num_heads=self.num_heads, model_dim=self.model_dim)(x)
+        pos=jnp.arange(x.shape[1])[None, :].repeat(x.shape[0], 0)
+        print(pos.shape)
+        x=MLA_rope(self.mla_config, self.model_dim)(x,use_cache=False, pos=pos)
         stream=x+stream
         x=RMSNorm()(stream)
         x=FFN(weights=[self.model_dim, self.model_dim*4, self.model_dim], activation=self.activation)(x,last_layer_act=True)
@@ -84,9 +85,7 @@ class DeepSeekModel(nn.Module):
         )
 
         x,_ = BlockStack(
-            latent_dim=self.model_config.latent_dim,
-            hidden_dim=self.model_config.hidden_dim,
-            num_heads=self.model_config.num_heads,
+            mla_config=self.model_config.mla_config,
             model_dim=self.model_config.model_dim,
             activation=self.model_config.activation,
         )(x)
@@ -96,10 +95,17 @@ class DeepSeekModel(nn.Module):
 
 
 def test_transformer_forward():
+
+    mla_config= MLA_config(
+        latent_dim_q=8,
+        latent_dim_kv=16,
+        dim_content=512,
+        dim_pos=128,
+        num_heads=8,
+    )
+
     model_config=ModelConfig(   
-        latent_dim=8,
-        hidden_dim=4096,
-        num_heads=5, 
+        mla_config=mla_config,
         model_dim=4096,
         activation= Activation.RELU,
         transformer_depth=10,
