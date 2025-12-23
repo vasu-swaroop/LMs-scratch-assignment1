@@ -1,10 +1,10 @@
-from models.base_layers import Attention
+from models.base_layers import Attention, gumbel_softmax,Rope, FFN
 from jax import numpy as jnp
-from jaxtyping import Float,Array, Int
+from jaxtyping import Float, Array, Int
 import jax 
-from models.schemas import MLA_config
+from models.schemas import MLA_config, MOE_FFN_config, RouterType
 from flax import linen as nn
-from models.base_layers import Rope
+from models.schemas import Activation
 from einops import rearrange
 class MLA_rope(nn.Module):
     '''Currently implementing non rope, non kv cache implementation'''
@@ -81,7 +81,72 @@ class MLA_rope(nn.Module):
         out_token=self.up_proj(attention)
         return out_token+x
 
+class MOE_FFN(nn.Module):
+    config: MOE_FFN_config
+    model_dim:int
 
+    def setup(self):
+        self.shared_experts = nn.vmap(
+            FFN,
+            variable_axes={"params": 0}, 
+            split_rngs={"params": True}, 
+            in_axes=None,
+            out_axes=0,
+            axis_size=self.config.num_shared_experts
+        )(
+            weights=[self.model_dim, self.model_dim*4, self.model_dim],
+            activation=self.config.activation
+        )
+        
+        self.routing_experts = nn.vmap(
+            FFN, 
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+            in_axes=None,
+            out_axes=0,
+            axis_size=self.config.num_routing_experts
+        )(
+            weights=[self.model_dim, self.model_dim*4, self.model_dim],
+            activation=self.config.activation
+        )
+
+        self.router = FFN([self.model_dim, self.config.num_routing_experts], activation=self.config.activation)
+
+    def __call__(self, x:Float[Array, 'B S D'])->Float[Array, 'B S D']:
+        shared_out = self.shared_experts(x)
+        all_experts = self.routing_experts(x)
+
+        logits=self.router(x)
+        key = self.make_rng('gumbel')
+        router_probs, _=gumbel_softmax(logits, key, temprature=0.1) 
+        chosen_experts=jax.lax.top_k(router_probs, k=self.config.num_selected_experts, axis=-1)[1]
+        
+        one_hot_vectors = jax.nn.one_hot(chosen_experts, self.config.num_routing_experts)
+        out=jnp.einsum("B S c O,O B S D->c B S D", one_hot_vectors, all_experts)
+        out=jnp.sum(out, axis=0)
+        
+        shared_out_sum = jnp.sum(shared_out, axis=0)
+        
+        return out + shared_out_sum 
+
+def test_MOE():
+    print("Testing MOE")
+    rng=jax.random.PRNGKey(42)
+    inp =jnp.ones((7,6,4096))
+    out,key=jax.random.split(rng)
+
+    moe_ffn_config=MOE_FFN_config(
+    num_shared_experts=2,
+    num_routing_experts=6,
+    num_selected_experts=2,
+    expert_dim=1024,
+    activation=Activation.RELU,
+    router_type=RouterType.LEARNED
+    )
+
+    model_params=MOE_FFN(moe_ffn_config, model_dim=4096).init({'params': key, 'gumbel': key}, inp)
+    out=MOE_FFN(moe_ffn_config, model_dim=4096).apply(model_params, inp,rngs={'gumbel': key})
+    print(out.shape)
 
 def test_mla_forward():
     print("Testing mla")
@@ -103,4 +168,4 @@ def test_mla_forward():
     print(out.shape, out)
     # assert jnp.equal(out, inp).all()
 if __name__== '__main__':
-    test_mla_forward()
+    test_MOE()

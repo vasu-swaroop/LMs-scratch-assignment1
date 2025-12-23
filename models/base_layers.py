@@ -1,8 +1,7 @@
 from flax import linen as nn 
 from jax import numpy as jnp
 import jax
-from jaxtyping import Float, Array, Int
-
+from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation
 
 class FFN(nn.Module):
@@ -82,7 +81,13 @@ class Attention(nn.Module):
         return attention
     #TODO: Add masking for causal inference as well
 
-
+def gumbel_softmax(x:Float[Array, '... D'], key:PRNGKeyArray, temprature:Float=0.1)->Float[Array, '... D']:
+    key, subkey=jax.random.split(key)
+    gumbel_noise=jax.random.gumbel(subkey, x.shape)
+    x=(x+gumbel_noise)/temprature
+    x=nn.softmax(x, axis=-1)
+    return x, key
+    
 def test_attetnion_forward():
     print("Tessting attention")
 
@@ -117,3 +122,4 @@ def test_rope_forward():
 
 if __name__== "__main__":
     test_rope_forward()
+
