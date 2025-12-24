@@ -2,12 +2,15 @@
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
 from pathlib import Path
+from typing import List, Union
 from .pre_tokenization import PreToken, PreTokenRegistry
 from .tokens import Token, TokenRegistery
 from .token_pair import TokenPairRegistry
 from joblib import Parallel, delayed
 from tqdm import tqdm
 import pickle
+import joblib
+import regex as re
 
 @dataclass
 class TokenizerConfig:
@@ -20,8 +23,8 @@ class TokenizerConfig:
     separating_token: list[str] = field(default_factory=lambda: ['<|endoftext|>'])
     stats_file: Path = Path('tokenizer_timing_stats.txt')
     save_freq: int = 10_000
-    resume_from_checkpoint: bool = True
-    save_file_dir: Path= Path('tokenizer/owt_train')
+    resume_from_checkpoint: bool = False
+    save_file_dir: Path= Path('tokenizer/trained/owt_train')
 
 class Tokenizer():
     def __init__(self, config: TokenizerConfig = None):
@@ -88,7 +91,8 @@ class Tokenizer():
 
         # Create a new token
         merged_bytes=token_A.byte_arr+token_B.byte_arr
-        new_token= self.token_registery.add_tokens(merged_bytes, token_pair_metadata.token_pair_count) 
+        merged_tokens=(token_A, token_B)
+        new_token= self.token_registery.add_tokens(merged_bytes, token_pair_metadata.token_pair_count,merged_tokens) 
         
         # Update the PreTokenFreq list of pretokens using pretoken registery        
         for pre_tokens in token_pair_list: 
@@ -102,7 +106,7 @@ class Tokenizer():
     def save_tokenizer_state(self, step:int,save_name:str):
         """Save full tokenizer state for resuming training (large file)."""
         base=self.config.save_file_dir
-        base.mkdir(exist_ok=True)
+        base.mkdir(exist_ok=True, parents=True)
         save_path=base /f'{save_name}_{step:7d}.pkl'
         with open(save_path, 'wb') as f:
             pickle.dump(self, f)
@@ -114,7 +118,7 @@ class Tokenizer():
         This is much smaller than saving the full tokenizer state.
         """
         base=self.config.save_file_dir
-        base.mkdir(exist_ok=True)
+        base.mkdir(exist_ok=True, parents=True)
         save_path=base / f'{save_name}_{step:07d}_inference.pkl'
         
         # Only save what's needed for inference
@@ -278,3 +282,59 @@ class Tokenizer():
         with open(save_file_name, 'w') as f:
             f.write("\n".join(stats))
         print(f"Timing stats saved to {self.config.stats_file}")
+
+    def split_pretokens(self, text):
+        regex = self.pre_token_registery.regex_split_pattern
+        words = re.findall(regex, text)
+        return words
+
+    def tokenize(self, token_stream:List[Token])-> List[Token]:
+        cur_token_stream = token_stream
+        merge_pending=True
+        
+        while(merge_pending):
+            new_token_stream=[]
+            new_token_stream.append(cur_token_stream[0])
+
+            for token in cur_token_stream[1:]:
+                # Check if concatenated bytes exist as a token in vocabulary
+                merged_bytes = new_token_stream[-1].byte_arr + token.byte_arr
+                merged_token = self.token_registery.get_token_by_bytes(merged_bytes)
+                
+                if merged_token is not None:
+                    new_token_stream[-1] = merged_token
+                else:
+                    new_token_stream.append(token)
+
+            merge_pending= not(len(new_token_stream)==len(cur_token_stream))
+            cur_token_stream=new_token_stream
+
+        return new_token_stream
+
+    def inference_on_text(self, text: str, ret_type: str = 'tokens') -> Union[List[List[Token]], List[List[int]]]:
+        """Tokenize text and return either token objects or token indices.
+        
+        Args:
+            text: Input text to tokenize
+            ret_type: 'int' to return token indices, 'tokens' to return Token objects
+            
+        Returns:
+            List of token lists (either Token objects or integers)
+        """
+        # Split text into pretokens
+        all_pretokens = self.split_pretokens(text)
+        
+        # Convert pretokens (bytes) to initial Token objects
+        all_pretokens_tokens = []
+        for pretoken in all_pretokens:
+            # Convert each byte in the pretoken to a Token using efficient byte lookup
+            token_list = [self.token_registery.get_token_by_bytes(bytes([byte])) for byte in pretoken.encode('utf-8')]
+            all_pretokens_tokens.append(token_list)
+        
+        # Apply BPE merging to each pretoken's token list
+        all_words_tokens = Parallel(n_jobs=1)(delayed(self.tokenize)(token_list) for token_list in all_pretokens_tokens)
+
+        if ret_type == 'int':
+            return [[token.token_idx for token in token_list] for token_list in all_words_tokens]
+        else:
+            return all_words_tokens

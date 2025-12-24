@@ -104,7 +104,7 @@ class PreTokenRegistry():
             self.pre_token_freq_dict.pop(text) 
 
     def save_pre_token(self, save_path):
-        save_path.parent.mkdir(exist_ok=True)
+        save_path.parent.mkdir(exist_ok=True, parents=True)
         with open(save_path, 'wb') as f:
             pickle.dump(self, f)
 
