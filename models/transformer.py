@@ -64,17 +64,24 @@ class Embedding(nn.Module):
 class Sampling():
     pass
 
+class Embedding(nn.Module):
+    vocab_length:int
+    model_dim: int
+
+    @nn.compact
+    def __call__(self, x:Float[Array, 'B S'])-> Float[Array, 'B S D']:
+        embed=nn.Embed(self.vocab_length,self.model_dim)
+        x=embed(x)
+        return x
+
 class DeepSeekModel(nn.Module):
     model_config: ModelConfig
-    # embedding_model: Embedding
-    # tokenizer: Tokenizer
 
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
-        print(token_idx_list)
+
         emebeddings=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
         x=jnp.stack(emebeddings)
-
         BlockStack = nn.scan(
             TransformerBlock,
             variable_axes={"params": 0},   # ← separate params per depth
@@ -92,26 +99,30 @@ class DeepSeekModel(nn.Module):
         )(x)
         x= nn.Dense(self.model_config.vocab_length)(x)
         x= nn.softmax(x,axis=-1)
+        print(x.shape)
         return x
 
 
 def test_transformer_forward():
     model_config=ModelConfig(   
         latent_dim=8,
-        hidden_dim=4096,
-        num_heads=5, 
-        model_dim=4096,
+        hidden_dim=128,
+        num_heads=4, 
+        model_dim=256,
         activation= Activation.RELU,
-        transformer_depth=10,
-        vocab_length=10)
-
-    tokenizer= Tokenizer()
+        transformer_depth=4,
+        vocab_length=32_000)
+    checkpoint_path= Path('/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl')
+    
+    
+    tokenizer = Tokenizer.load_for_inference(checkpoint_path)
     model=DeepSeekModel(model_config=model_config,)
-    input_data= jnp.asarray([1,2,3,4,5])
+    input_data= jnp.asarray(range(10000))
+    print(input_data.shape)
     input_data= jnp.expand_dims(input_data, axis=0)
     key=jax.random.PRNGKey(42)
     variables=model.init(key, input_data)
-    model.apply(variables, input_data)
+    model.apply(variables, input_data)  
 
 if __name__=='__main__':
 
