@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from jaxtyping import PRNGKeyArray, Float, Int, Array
 import pickle
 from models.schemas import MLA_config, MOE_FFN_config, RouterType, ModelConfig, Activation
-
+from training.data import Data
+from pathlib import Path
 from flax import linen as nn
 
 def cross_entropy_loss(logits: Float[Array, 'B S D'], target: Int[Float, 'B S']):
@@ -31,6 +32,9 @@ class TrainSettings:
     cur_steps: int
     cur_epoch: int
     resume_ckpt: bool
+    seq_len:int
+    train_steps:int
+    data_path: Path
     prng_key: PRNGKeyArray
     
 class Training():
@@ -60,67 +64,26 @@ class Training():
 
         return variables, loss, grads, optimizer_states
     
-    def train(self):
-        input_data = jnp.asarray(range(10000))
-        # input_data = jnp.expand_dims(input_data, axis=0)
-        input_data = jnp.stack([input_data]*1, axis=0)
-
+    def train(self, dataset):
+        input_data, _ =next(dataset.data_loader())
         model = DeepSeekModel(self.model_config)
         key = self.training_config.prng_key
-
         variables = model.init({'params': key, 'gumbel': key}, input_data)
 
         optimizer_states = AdamOptimizer().init(variables['params'])
-        for i in range(100):
+        for idx, (input_data, output_data) in enumerate(dataset.data_loader()):
             key, subkey = jax.random.split(key)
             variables, loss, grads, optimizer_states = self.train_step(
-                model, variables, optimizer_states, input_data, input_data, subkey
+                model, variables, optimizer_states, input_data, output_data, subkey
             )
             grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
-            print(f"Step {i}: loss={loss:.4f}, grad_norm={grad_norm:.4f}")
+            print(f"Step {idx}: loss={loss:.4f}, grad_norm={grad_norm:.4f}")
 
 
 if __name__=='__main__':
     # Import required schemas
     from models.schemas import MLA_config, MOE_FFN_config, RouterType
-    
-    # Test training configuration using values from transformer.py
-    test_mla_config = MLA_config(
-        latent_dim_q=4,
-        latent_dim_kv=8,
-        dim_content=256,
-        dim_pos=64,
-        num_heads=6,
-    )
-    
-    test_moe_config = MOE_FFN_config(
-        num_shared_experts=1,
-        num_routing_experts=4,
-        num_selected_experts=2,
-        expert_dim=512,
-        activation=Activation.RELU,
-        router_type=RouterType.LEARNED
-    )
-    
-    test_model_config = ModelConfig(
-        mla_config=test_mla_config,
-        moe_ffn_config=test_moe_config,
-        model_dim=256,
-        transformer_depth=2,
-        vocab_length=32_000
-    )
-    
-    test_train_settings = TrainSettings(
-        optimizer='adam',
-        lr=3e-4,
-        num_epochs=10,
-        batch_size=32,
-        cur_steps=0,
-        cur_epoch=0,
-        resume_ckpt=False,
-        prng_key=jax.random.PRNGKey(42)
-    )
-    
+        
     # Sample MOE (Mixture-of-Experts) configuration
     
     moe_mla_config = MLA_config(
@@ -152,28 +115,16 @@ if __name__=='__main__':
         optimizer='adam',
         lr=1e-6,                    # Lower learning rate for MOE models
         num_epochs=20,
-        batch_size=16,              # Smaller batch size due to MOE complexity
+        batch_size=4,              # Smaller batch size due to MOE complexity
         cur_steps=0,
         cur_epoch=0,
         resume_ckpt=False,
-        prng_key=jax.random.PRNGKey(42)
+        train_steps=100000,
+        seq_len=1000,
+        prng_key=jax.random.PRNGKey(42),
+        data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_test_tineystoruies_train')
     )
-    
-    # Initialize training
-    trainer = Training(test_train_settings, test_model_config)
-    print("Test config created successfully!")
-    print(f"Model config: {test_model_config}")
-    print(f"Training settings: {test_train_settings}")
-    
-    print("\n" + "="*60)
-    print("MOE Configuration created successfully!")
-    print("="*60)
-    print(f"\nMOE Model config: {moe_model_config}")
-    print(f"\nMOE Training settings: {moe_train_settings}")
-    print("\n" + "="*60)
-    
-    # Uncomment to train with MOE config instead:
-    # moe_trainer = Training(moe_train_settings, moe_model_config)
-    # moe_trainer.train()
-    
-    trainer.train()
+
+    dataset=Data(moe_train_settings.data_path,moe_train_settings.batch_size,moe_train_settings.train_steps, moe_train_settings.seq_len)
+    trainer = Training(moe_train_settings, moe_model_config)
+    trainer.train(dataset)
