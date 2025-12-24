@@ -37,14 +37,13 @@ class Data():
         self.total_docs_idx = range(len(self.documents))
         self.steps = steps
         self.batch_size = batch_size
-        self.seq_len = seq_len +1# 1 padding for data_loader to mathc the shapes
-    
+        self.seq_len = seq_len
 
     def data_loader(self):
         # Use threading backend so Document.cur_pos state is shared across workers
         parallel_sequencer = Parallel(n_jobs=-1, backend="threading")
         for step in range(self.steps):
-            chosen_docs = random.sample(self.total_docs_idx, self.batch_size)
+            chosen_docs = random.sample(self.total_docs_idx, self.batch_size+1)
             results = parallel_sequencer(
                 delayed(sample_text)(self.documents[idx], self.seq_len) for idx in chosen_docs
             )
