@@ -5,6 +5,7 @@
 - [x] After merging, I did not apply a recursive merge update on the token_pair.
 - [x] Was not updating the token list when creating new.
 - [x] Double counting of `A A A A`. (Used LLM to find and debug).
+- [x] Proper merging during word tokenization inference. I am just checking the existence in the tokenizer
 
 > Adding asserts really helped with testing.
 
