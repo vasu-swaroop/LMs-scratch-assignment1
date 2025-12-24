@@ -1,8 +1,7 @@
 from flax import linen as nn 
 from jax import numpy as jnp
 import jax
-from jaxtyping import Float, Array
-
+from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation
 
 class FFN(nn.Module):
@@ -42,6 +41,35 @@ def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> 
 
    return jnp.matmul(x, y)
 
+
+class pos_to_freq(nn.Module):
+    model_dim:int
+    @nn.compact
+    def __call__(self, pos:Int[Array, 'B S']):
+        freq=-2*pos/self.model_dim
+        freq= 10000**freq
+        return freq  
+
+class Rope(nn.Module):
+    model_dim:int
+    @nn.compact
+    def __call__(self, x:Float[Array, '... D'], pos:Float[Array, 'S'])-> Float[Array, '... D']:        
+        pos=pos_to_freq(self.model_dim)(pos)
+        pos=pos[:,:,None]
+
+        cos_pos=jnp.cos(pos)
+        sin_pos=jnp.sin(pos)
+
+        half_dim=x.shape[-1]//2
+        even=x[...,:half_dim] # 'B S H D//2' or  B S D//2
+        odd= x[...,:,half_dim:]
+
+        assert even.shape[-1]==odd.shape[-1]
+        even_=even * cos_pos - odd * sin_pos # 'B S H D//2'
+        odd_=even * cos_pos + odd * sin_pos
+
+        return jnp.concat([even_, odd_], axis=-1)
+
 class Attention(nn.Module):
     hidden_dim: int
     @nn.compact
@@ -53,59 +81,13 @@ class Attention(nn.Module):
         return attention
     #TODO: Add masking for causal inference as well
 
-class MLA(nn.Module):
-    '''Currently implementing non rope, non kv cache implementation'''
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
-    model_dim: int
-    @nn.compact
-    def to_kv_tokens(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
-        cache = nn.Dense(self.latent_dim)(x) # 'B S d'
-        x = nn.Dense(self.num_heads*self.hidden_dim)(cache) # 'B S H*D'
-        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
-        return x, cache
+def gumbel_softmax(x:Float[Array, '... D'], key:PRNGKeyArray, temprature:Float=0.1)->Float[Array, '... D']:
+    key, subkey=jax.random.split(key)
+    gumbel_noise=jax.random.gumbel(subkey, x.shape)
+    x=(x+gumbel_noise)/temprature
+    x=nn.softmax(x, axis=-1)
+    return x, key
     
-    @nn.compact
-    def to_q_tokens(self,x:Float[Array, 'B S M'])-> Float[Array, 'B S H D']:
-        x = nn.Dense(self.hidden_dim*self.num_heads)(x)
-        x = jnp.reshape(x, (x.shape[0],x.shape[1], self.num_heads, self.hidden_dim))
-        return x
-
-    @nn.compact
-    def __call__(self, x:Float[Array, 'B S M'])-> Float[Array, 'B S M']:
-        kv_concat=jnp.stack([x,x], axis=0)
-        kv_tokens, kv_cache=jax.vmap(self.to_kv_tokens)(kv_concat) #TODO: implement KV cache
-        k_tokens, v_tokens= jnp.split(kv_tokens,2, axis=0)
-        k_tokens, v_tokens= k_tokens[0], v_tokens[0]
-
-        q_tokens= self.to_q_tokens(x)
-        
-        attention=Attention(self.hidden_dim)(q_tokens, k_tokens, v_tokens)
-        
-        #Concatenate the multiple heads
-        attention= jnp.reshape(attention, (attention.shape[0],attention.shape[1], self.num_heads* self.hidden_dim))
-
-        #Up project
-        out_token=nn.Dense(self.model_dim)(attention)
-        return out_token
-
-
-
-
-def test_transformer_forward():
-    print("Testing Transformer")
-
-    rng=jax.random.PRNGKey(42)
-    inp =jnp.ones((7,6,4096))
-    transformer_block=TransformerBLock(latent_dim=256, hidden_dim=512, num_heads=8, model_dim=4096, activation=Activation.RELU)
-    model_params=transformer_block.init(rng, inp)
-    out= transformer_block.apply(model_params, inp)
-    print(out)
-    print(out.shape)
-
-    #TODO: Add an assert, and mathematically compare what will be the value of MLA Transformer when all input is 1
-
 def test_attetnion_forward():
     print("Tessting attention")
 
@@ -127,5 +109,17 @@ def test_mlp_forward():
     out=mlp.apply(model_var, inp)     
     print(out.shape)
 
+def test_rope_forward():
+    print("testing rope")
+    rope=Rope(12312312)
+    inp_seq=jnp.ones((15,14,12,34))
+    inp_pos=jnp.arange(0,14)
+
+    var=rope.init(jax.random.PRNGKey(42), inp_seq, inp_pos)
+    out=rope.apply(var, inp_seq, inp_pos)
+
+    print(out.shape)
+
 if __name__== "__main__":
-    test_transformer_forward()
+    test_rope_forward()
+
