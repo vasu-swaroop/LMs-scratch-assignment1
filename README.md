@@ -8,6 +8,7 @@ The core logic is manually implemented to maximize learning. AI assistance was u
 2. Fixing typing inconsistencies and naming bugs.
 3. Ideation on how to hash/tuple token pairs and hashing dataclasses.
 4. Adding time logging.
+5. State saving and loading
 
 **Also adding a bugs_and_ideas.md file in all directory to keep a track of ideas explored and problems faced**
 

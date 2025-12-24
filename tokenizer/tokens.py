@@ -32,5 +32,8 @@ class TokenRegistery():
     def get_token(self, token_idx:int)->Token:
         return self._tokens[token_idx]
 
+    def get_token_dict(self)->dict[int, Token]:
+        return self._tokens
+
 
     
