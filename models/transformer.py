@@ -1,10 +1,11 @@
-from .base_layer import RMSNorm, MLA, FFN
+from models.base_layers import RMSNorm
+from models.attention import MLA_rope, MOE_FFN 
 from flax import linen as nn
 from jaxtyping import Float, Array, PRNGKeyArray, Int
 from typing import Union
 from tokenizer.tokens import Token
 from tokenizer.tokenizer import Tokenizer
-from .schemas import ModelConfig, Activation
+from models.schemas import ModelConfig, Activation, MLA_config, MOE_FFN_config, RouterType
 from jax import numpy as jnp
 import jax
 
@@ -12,20 +13,19 @@ from pathlib import Path
 
 ''' Inpsired from https://arxiv.org/pdf/2412.19437'''
 class TransformerBlock(nn.Module):
-    latent_dim:int
-    hidden_dim:int
-    num_heads: int
+    mla_config: MLA_config
     model_dim:int
-    activation: Activation
+    moe_ffn_config: MOE_FFN_config
 
     @nn.compact
     def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
         stream=x
         x=RMSNorm()(x)
-        x=MLA(latent_dim=self.latent_dim, hidden_dim=self.hidden_dim, num_heads=self.num_heads, model_dim=self.model_dim)(x)
+        pos=jnp.arange(x.shape[1])[None, :].repeat(x.shape[0], 0)
+        x=MLA_rope(self.mla_config, self.model_dim)(x,use_cache=False, pos=pos)
         stream=x+stream
         x=RMSNorm()(stream)
-        x=FFN(weights=[self.model_dim, self.model_dim*4, self.model_dim], activation=self.activation)(x,last_layer_act=True)
+        x=MOE_FFN(config=self.moe_ffn_config, model_dim=self.model_dim)(x)
         stream=x+stream
         return stream, 1
 
@@ -85,17 +85,15 @@ class DeepSeekModel(nn.Module):
         BlockStack = nn.scan(
             TransformerBlock,
             variable_axes={"params": 0},   # ← separate params per depth
-            split_rngs={"params": True},
+            split_rngs={"params": True, "gumbel": True},
             variable_broadcast=False,
             length=self.model_config.transformer_depth,
         )
 
         x,_ = BlockStack(
-            latent_dim=self.model_config.latent_dim,
-            hidden_dim=self.model_config.hidden_dim,
-            num_heads=self.model_config.num_heads,
+            mla_config=self.model_config.mla_config,
             model_dim=self.model_config.model_dim,
-            activation=self.model_config.activation,
+            moe_ffn_config=self.model_config.moe_ffn_config,
         )(x)
         x= nn.Dense(self.model_config.vocab_length)(x)
         x= nn.softmax(x,axis=-1)
@@ -104,7 +102,29 @@ class DeepSeekModel(nn.Module):
 
 
 def test_transformer_forward():
+
+    mla_config= MLA_config(
+        latent_dim_q=8,
+        latent_dim_kv=16,
+        dim_content=512,
+        dim_pos=128,
+        num_heads=8,
+    )
+
+    moe_ffn_config=MOE_FFN_config(
+        num_shared_experts=2,
+        num_routing_experts=6,
+        num_selected_experts=2,
+        expert_dim=1024,
+        activation=Activation.RELU,
+        router_type=RouterType.LEARNED
+    )
+
     model_config=ModelConfig(   
+        mla_config=mla_config,
+        moe_ffn_config=moe_ffn_config,
+        model_dim=1028,
+        transformer_depth=2,
         latent_dim=8,
         hidden_dim=128,
         num_heads=4, 
@@ -121,8 +141,8 @@ def test_transformer_forward():
     print(input_data.shape)
     input_data= jnp.expand_dims(input_data, axis=0)
     key=jax.random.PRNGKey(42)
-    variables=model.init(key, input_data)
-    model.apply(variables, input_data)  
+    variables=model.init({'params': key, 'gumbel': key}, input_data)
+    model.apply(variables, input_data, rngs={'gumbel': key})
 
 if __name__=='__main__':
 
