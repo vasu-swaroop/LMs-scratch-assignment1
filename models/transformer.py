@@ -97,12 +97,19 @@ class DeepSeekModel(nn.Module):
 
 def test_transformer_forward():
     model_config=ModelConfig(   
+<<<<<<< Updated upstream
         latent_dim=8,
         hidden_dim=4096,
         num_heads=5, 
         model_dim=4096,
         activation= Activation.RELU,
         transformer_depth=10,
+=======
+        mla_config=mla_config,
+        moe_ffn_config=moe_ffn_config,
+        model_dim=512,
+        transformer_depth=2,
+>>>>>>> Stashed changes
         vocab_length=10)
 
     tokenizer= Tokenizer()

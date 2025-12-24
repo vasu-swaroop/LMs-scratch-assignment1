@@ -1,0 +1,5 @@
+Pre-tokenization (loaded): 3.07s
+Base Frequency Calculation: 0.62s
+Token Pair Initialization: 5.17s
+Merge Loop: 21.71s
+Saving Tokenizer (inference): 0.01s
