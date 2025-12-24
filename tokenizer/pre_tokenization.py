@@ -1,5 +1,6 @@
 import os
 import regex as re
+import pickle
 from dataclasses import dataclass, field
 from typing import BinaryIO
 from joblib import Parallel, delayed
@@ -58,8 +59,8 @@ class PreTokenRegistry():
     def __init__(self, corpus_path, separating_tokens=['<|endoftext|']):
         self.corpus_path = corpus_path
         self.pre_token_freq_dict: dict[str, PreToken] = {}
-        
         self.separating_tokens=separating_tokens
+
         escaped = [re.escape(tok) for tok in self.separating_tokens]
         sep_pattern = "|".join(escaped)
         print(sep_pattern)
@@ -74,19 +75,7 @@ class PreTokenRegistry():
             r"\s+"
         ]
         self.regex_split_pattern = "|".join(parts)
-    #     self._lock = Lock()
 
-    # def __getstate__(self):
-    #     state = self.__dict__.copy()
-    #     # Remove lock, it cannot be pickled
-    #     del state['_lock']
-    #     return state
-
-    # def __setstate__(self, state):
-    #     self.__dict__.update(state)
-    #     # Restore lock
-    #     self._lock = Lock()
-        
     def populate_pre_token(self, num_process=4, num_chunks=2000):
         with open(self.corpus_path, 'rb') as f:
             boundaries = find_chunk_boundaries(f, num_chunks, b"<|endoftext|>")
@@ -108,11 +97,16 @@ class PreTokenRegistry():
             if text not in self.pre_token_freq_dict:
                 self.create_pre_token_entry(text)
             self.pre_token_freq_dict[text].freq = freq
-          
+        #TODO: This will add time overhead, remove that, and add in test
         assert all([x in global_counter.keys() for x  in self.separating_tokens]) , "Wrong separating token added"
     def remove_sep_pattern(self):
         for text in self.separating_tokens:
             self.pre_token_freq_dict.pop(text) 
+
+    def save_pre_token(self, save_path):
+        save_path.parent.mkdir(exist_ok=True, parents=True)
+        with open(save_path, 'wb') as f:
+            pickle.dump(self, f)
 
     def create_pre_token_entry(self, text: str):
         byte_sequence = text.encode()

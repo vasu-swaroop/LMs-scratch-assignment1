@@ -116,6 +116,12 @@ def test_transformer_forward():
         moe_ffn_config=moe_ffn_config,
         model_dim=1028,
         transformer_depth=2,
+        latent_dim=8,
+        hidden_dim=4096,
+        num_heads=5, 
+        model_dim=4096,
+        activation= Activation.RELU,
+        transformer_depth=10,
         vocab_length=10)
 
     tokenizer= Tokenizer()
