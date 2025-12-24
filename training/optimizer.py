@@ -33,27 +33,45 @@ class AdamOptimizer:
         params, grads, state are pytrees with identical structure
         """
 
-        def update(p, g, m, v):
-            m = self.beta_1 * m + (1.0 - self.beta_1) * g
-            v = self.beta_2 * v + (1.0 - self.beta_2) * (g ** 2)
-            p = p - self.learning_rate * m / (jnp.sqrt(v) + self.epsilon)
-            return p, m, v
+        def update_param(p, g, m, v):
+            m_new = self.beta_1 * m + (1.0 - self.beta_1) * g
+            v_new = self.beta_2 * v + (1.0 - self.beta_2) * (g ** 2)
+            p_new = p - self.learning_rate * m_new / (jnp.sqrt(v_new) + self.epsilon)
+            return p_new
+        
+        def update_momentum(p, g, m, v):
+            return self.beta_1 * m + (1.0 - self.beta_1) * g
+        
+        def update_momentum_sq(p, g, m, v):
+            return self.beta_2 * v + (1.0 - self.beta_2) * (g ** 2)
 
-        out = jax.tree_util.tree_map(
-            update,
+        new_params = jax.tree_util.tree_map(
+            update_param,
+            params,
+            grads,
+            state["momentum"],
+            state["momentum_sq"],
+        )
+        
+        new_momentum = jax.tree_util.tree_map(
+            update_momentum,
+            params,
+            grads,
+            state["momentum"],
+            state["momentum_sq"],
+        )
+        
+        new_momentum_sq = jax.tree_util.tree_map(
+            update_momentum_sq,
             params,
             grads,
             state["momentum"],
             state["momentum_sq"],
         )
 
-        params = jax.tree_util.tree_map(lambda x: x[0], out)
-        momentum = jax.tree_util.tree_map(lambda x: x[1], out)
-        momentum_sq = jax.tree_util.tree_map(lambda x: x[2], out)
-
         new_state = {
-            "momentum": momentum,
-            "momentum_sq": momentum_sq,
+            "momentum": new_momentum,
+            "momentum_sq": new_momentum_sq,
         }
 
-        return params, new_state
+        return new_params, new_state
