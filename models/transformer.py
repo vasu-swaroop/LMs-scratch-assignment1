@@ -31,48 +31,16 @@ class TransformerBlock(nn.Module):
 
 
 class Embedding(nn.Module):
-    vocab_length:int
-    model_dim:int
-        # self.embeddding_dict:dict[int, Float[Array, 'D']]={}
-
-    # def load_embedding(self, embedding_path:Path):
-    #     if embedding_path:
-    #         with open(embedding_path, 'rb') as f:
-    #             self.embedding_dict=pickle.load(f)
-
-    # def save_embedding(self, embedding_path:Path):
-    #     if embedding_path:
-    #         with open(embedding_path, 'wb') as f:
-    #             pickle.dump(self.embedding_dict, f)
-    
-    # def init_emebddings(self, key:PRNGKeyArray,  token_list: list[int]):
-    #     for token in token_list:
-    #         key, subkey=jax.random.split(key)
-    #         self.embeddding_dict[token]=jax.random.normal(key, (self.model_dim))
-
-    # def lookup(self, token:int):
-    #     return self.__call__(token)
-
-    @nn.compact
-    def __call__(self, token_idx_list: Int[Array, 'B S']):
-        embed = self.param(
-            "embedding",
-            nn.initializers.normal(),
-            (self.vocab_length, self.model_dim),
-        )
-        return embed[token_idx_list]
-class Sampling():
-    pass
-
-class Embedding(nn.Module):
-    vocab_length:int
+    vocab_length: int
     model_dim: int
 
     @nn.compact
-    def __call__(self, x:Float[Array, 'B S'])-> Float[Array, 'B S D']:
-        embed=nn.Embed(self.vocab_length,self.model_dim)
-        x=embed(x)
-        return x
+    def __call__(self, token_idx_list: Int[Array, 'B S']) -> Float[Array, 'B S D']:
+        return nn.Embed(self.vocab_length, self.model_dim)(token_idx_list)
+
+
+class Sampling():
+    pass
 
 class DeepSeekModel(nn.Module):
     model_config: ModelConfig
@@ -80,8 +48,7 @@ class DeepSeekModel(nn.Module):
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
 
-        emebeddings=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
-        x=jnp.stack(emebeddings)
+        x=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
         BlockStack = nn.scan(
             TransformerBlock,
             variable_axes={"params": 0},   # ← separate params per depth
@@ -96,8 +63,6 @@ class DeepSeekModel(nn.Module):
             moe_ffn_config=self.model_config.moe_ffn_config,
         )(x)
         x= nn.Dense(self.model_config.vocab_length)(x)
-        x= nn.softmax(x,axis=-1)
-        print(x.shape)
         return x
 
 
@@ -123,14 +88,11 @@ def test_transformer_forward():
     model_config=ModelConfig(   
         mla_config=mla_config,
         moe_ffn_config=moe_ffn_config,
-        model_dim=1028,
-        transformer_depth=2,
-        latent_dim=8,
+        model_dim=512,
+        transformer_depth=10,
         hidden_dim=128,
-        num_heads=4, 
-        model_dim=256,
+        num_heads=8, 
         activation= Activation.RELU,
-        transformer_depth=4,
         vocab_length=32_000)
     checkpoint_path= Path('/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl')
     
@@ -138,7 +100,6 @@ def test_transformer_forward():
     tokenizer = Tokenizer.load_for_inference(checkpoint_path)
     model=DeepSeekModel(model_config=model_config,)
     input_data= jnp.asarray(range(10000))
-    print(input_data.shape)
     input_data= jnp.expand_dims(input_data, axis=0)
     key=jax.random.PRNGKey(42)
     variables=model.init({'params': key, 'gumbel': key}, input_data)
