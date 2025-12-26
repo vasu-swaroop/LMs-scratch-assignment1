@@ -16,7 +16,7 @@ class Document():
     def sample_text(self, seq_len):
         out_arr = self.np_array[self.cur_pos:self.cur_pos+seq_len]
         # Randomly advance or slightly backtrack to vary the sequence start
-        self.cur_pos += max(0, random.randint(-seq_len//2, seq_len))
+        self.cur_pos += 1
         
         # If we reach the end, reset or pad
         if len(out_arr) < seq_len:
@@ -43,7 +43,16 @@ class Data():
         # Use threading backend so Document.cur_pos state is shared across workers
         parallel_sequencer = Parallel(n_jobs=-1, backend="threading")
         for step in range(self.steps):
-            chosen_docs = random.sample(self.total_docs_idx, self.batch_size+1)
+            # We need at least batch_size+1 samples to create input/output pairs
+            num_docs_needed = self.batch_size + 1
+            
+            if len(self.total_docs_idx) >= num_docs_needed:
+                # Enough documents - sample without replacement
+                chosen_docs = random.sample(self.total_docs_idx, num_docs_needed)
+            else:
+                # Not enough documents - sample with replacement
+                chosen_docs = random.choices(list(self.total_docs_idx), k=num_docs_needed)
+            
             results = parallel_sequencer(
                 delayed(sample_text)(self.documents[idx], self.seq_len) for idx in chosen_docs
             )

@@ -289,6 +289,9 @@ class Tokenizer():
         return words
 
     def tokenize(self, token_stream:List[Token])-> List[Token]:
+        token_present=self.token_registery.get_token_by_bytes(b''.join([token.byte_arr for token in token_stream]))
+        if token_present:
+            return [token_present ]
         cur_token_stream = token_stream
         merge_pending=True
         

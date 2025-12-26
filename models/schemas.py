@@ -26,7 +26,6 @@ class MOE_FFN_config():
     num_shared_experts: int  # Number of shared experts (always used)
     num_routing_experts: int  # Number of routing experts (to select from)
     num_selected_experts: int  # Top-k experts to select from routing experts
-    expert_dim: int
     activation: Activation
     router_type: RouterType
 

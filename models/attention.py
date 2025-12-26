@@ -92,7 +92,8 @@ class MOE_FFN(nn.Module):
             split_rngs={"params": True}, 
             in_axes=None,
             out_axes=0,
-            axis_size=self.config.num_shared_experts
+            axis_size=self.config.num_shared_experts,
+            axis_name="experts"
         )(
             weights=[self.model_dim, self.model_dim*4, self.model_dim],
             activation=self.config.activation
@@ -139,7 +140,6 @@ def test_MOE():
     num_shared_experts=2,
     num_routing_experts=6,
     num_selected_experts=2,
-    expert_dim=1024,
     activation=Activation.RELU,
     router_type=RouterType.LEARNED
     )
