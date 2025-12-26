@@ -7,9 +7,18 @@ from jaxtyping import PRNGKeyArray, Float, Int, Array
 import pickle
 from models.schemas import MLA_config, MOE_FFN_config, RouterType, ModelConfig, Activation
 from training.data import Data
+from tokenizer.tokenizer import Tokenizer
 from pathlib import Path
 from tqdm import tqdm
 from flax import linen as nn
+import wandb
+import os
+import glob
+import re
+from training.inference import generate
+from training.training_utils import save_checkpoint, load_checkpoint, resume_from_checkpoint
+jax.config.update("jax_log_compiles", True)
+# jax.config.update("jax_default_matmul_precision", "bfloat16")
 
 def cross_entropy_loss(logits: Float[Array, 'B S D'], target: Int[Float, 'B S']):
     """
@@ -28,27 +37,29 @@ def cross_entropy_loss(logits: Float[Array, 'B S D'], target: Int[Float, 'B S'])
 class TrainSettings:
     optimizer: str
     lr: float
-    num_epochs: int
     batch_size: int
-    cur_steps: int
-    cur_epoch: int
     resume_ckpt: bool
     seq_len:int
     train_steps:int
     data_path: Path
+    val_data_path: Path
     prng_key: PRNGKeyArray
     grad_accumulation: int
     num_gpus:int
+    checkpoint_dir: str = "checkpoints"
+    save_every: int = 20000
+    val_every: int = 5000
+    val_batches: int = 1
+    wandb_project: str = "LM-Training-Scratch"
+    wandb_run_name: str = "TinyStoriesOverfiting-100Lines"
+    use_wandb: bool = False
     
 class Training():
     def __init__(self, training_settings:TrainSettings, model_settings:ModelConfig):
         self.training_config=training_settings
         self.model_config=model_settings
 
-    def load_model(self, ckpt_path):
-        with open(ckpt_path, 'rb') as f:
-            data=pickle.load(ckpt_path)
-    
+
     def train_step(
         self,
         model,
@@ -57,58 +68,74 @@ class Training():
         input_data,
         out_data,
         key,
-        orig_grads,
+        accum_grads,
         grad_step=True,
     ):
+        def loss_fn(params, input_ids, targets, rng):
+            logits = model.apply({'params': params}, input_ids, rngs={'gumbel': rng})
+            ce_loss = cross_entropy_loss(logits, targets)
+            return ce_loss, ce_loss  # Return loss and aux (ce_loss for logging)
 
-        def loss_fn(params, input_data, target_data, key):
-            out = model.apply(
-                {'params': params},
-                input_data,
-                rngs={'gumbel': key}
-            )
-            loss = cross_entropy_loss(out, target_data)
-            return loss
-
-        def loss_and_grad_pmapped(params, input_data, target_data, key):
-            loss, grads = jax.value_and_grad(loss_fn)(
-                params, input_data, target_data, key
-            )
-
+        def step_fn(params, input_ids, targets, rng, current_grads, do_opt, opt_state):
+            (loss, ce_loss), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, input_ids, targets, rng)
+            
+            # Average loss and grads across devices
             loss = jax.lax.pmean(loss, axis_name='data')
+            ce_loss = jax.lax.pmean(ce_loss, axis_name='data')
             grads = jax.lax.pmean(grads, axis_name='data')
+            
+            # Clip and accumulate
+            grads = jax.tree_util.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), grads)
+            new_grads = jax.tree_util.tree_map(lambda x, y: x + y, grads, current_grads)
+            
+            # Calculate norm of accumulated grads BEFORE resetting
+            grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(new_grads)))
+            
+            def perform_opt():
+                optimizer = AdamOptimizer(learning_rate=self.training_config.lr)
+                updated_params, updated_opt_state = optimizer.step(params, new_grads, opt_state)
+                reset_grads = jax.tree_util.tree_map(jnp.zeros_like, new_grads)
+                return updated_params, updated_opt_state, reset_grads
 
-            return loss, grads
+            def skip_opt():
+                return params, opt_state, new_grads
 
-        loss_and_grad_pmapped = jax.pmap(
-            loss_and_grad_pmapped,
-            axis_name='data'
-        )
+            res_params, res_opt_state, res_grads = jax.lax.cond(do_opt, perform_opt, skip_opt)
+            return res_params, res_opt_state, res_grads, loss, grad_norm, ce_loss
 
-        # keys MUST be per-device
-        keys = jax.random.split(key, jax.local_device_count())
+        #Otherwise everytime we call train_step, we would call rcompilation.
+        if not hasattr(self, '_pmapped_train_step'):
+            self._pmapped_train_step = jax.pmap(
+                step_fn, 
+                axis_name='data', 
+                static_broadcasted_argnums=(5,)
+            )
 
-        loss, grads = loss_and_grad_pmapped(
+        num_devices = jax.local_device_count()
+        keys = jax.random.split(key, num_devices)
+
+        new_params, new_opt_state, new_grads, loss, grad_norm, ce_loss = self._pmapped_train_step(
             variables['params'],
             input_data,
             out_data,
-            keys
-        )
-
-        # safe to do non-collective ops outside
-        grads = jax.tree_util.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), grads)
-        grads = jax.tree_util.tree_map(lambda x, y: x + y, grads, orig_grads)
-
-        new_params, optimizer_states = AdamOptimizer().step(
-            variables['params'],
-            grads,
+            keys,
+            accum_grads,
+            grad_step,
             optimizer_states
         )
 
-        if grad_step:
-            variables = {'params': new_params}
+        return {'params': new_params}, loss, new_grads, new_opt_state, grad_norm, ce_loss
 
-        return variables, loss, grads, optimizer_states
+
+    def _val_step(self, model, variables, input_data, out_data, key):
+        """Validation step runs on a single GPU for simplicity."""
+        def loss_fn(params, input_data, target_data, key):
+            out = model.apply({'params': params}, input_data, rngs={'gumbel': key})
+            return cross_entropy_loss(out, target_data)
+
+        # Use only the first device's parameters for validation
+        params = jax.tree_util.tree_map(lambda x: x[0], variables['params'])
+        return loss_fn(params, input_data, out_data, key)
 
     def resize_for_multinode(self, inp):
         num_gpus=self.training_config.num_gpus
@@ -119,8 +146,18 @@ class Training():
             *inp.shape[1:]
         )
         return inp
-    def train(self, dataset):
-        input_data, _ =next(dataset.data_loader())
+    def train(self, dataset, val_dataset=None):
+        # Initialize W&B
+        if self.training_config.use_wandb:
+            wandb.init(
+                project=self.training_config.wandb_project,
+                name=self.training_config.wandb_run_name,
+                config=self.training_config.__dict__,
+                # id='uf7n20vn',
+                # resume="allow",
+            )
+
+        input_data, _ = next(dataset.data_loader())
         key = self.training_config.prng_key
 
         model = DeepSeekModel(self.model_config)
@@ -129,36 +166,96 @@ class Training():
             variables, jax.devices()
         )
 
+        # For generation
+        tokenizer = Tokenizer.load_for_inference('/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl')
+        # Initialize grads with the same replicated structure as variables['params']
+        grads = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), variables['params'])
 
-        grads=jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), variables['params'])
-
-        grad_accum_step_size=self.training_config.grad_accumulation
-        prev_grad_norm=0
-        optimizer_states = AdamOptimizer().init(variables['params'])
+        grad_accum_step_size = self.training_config.grad_accumulation
+        # Initialize optimizer states and replicate
+        optimizer_states = AdamOptimizer().init(jax.tree_util.tree_map(lambda x: x[0], variables['params']))
+        optimizer_states = jax.device_put_replicated(optimizer_states, jax.devices())
         
-        pbar = tqdm(enumerate(dataset.data_loader()), total=self.training_config.train_steps)
+        start_step = 0
+        if self.training_config.resume_ckpt:
+            resumed_vars, resumed_opt, start_step = resume_from_checkpoint(self.training_config.checkpoint_dir)
+            if resumed_vars is not None:
+                variables = resumed_vars
+                optimizer_states = resumed_opt
+
+        data_gen = dataset.data_loader()
+        val_gen = val_dataset.data_loader() if val_dataset else None
+        
+        pbar = tqdm(enumerate(data_gen, start=start_step), total=self.training_config.train_steps, initial=start_step)
         for idx, (input_data, output_data) in pbar:
-            input_data, output_data=self.resize_for_multinode(input_data), self.resize_for_multinode(output_data)
+            input_data, output_data = self.resize_for_multinode(input_data), self.resize_for_multinode(output_data)
             key, subkey = jax.random.split(key)
-            if idx%grad_accum_step_size==0:
-                grads=jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), variables['params'])
+            
+            update_weights = (idx + 1) % grad_accum_step_size == 0
 
-            update_weights=idx+1%grad_accum_step_size==0
-
-            variables, loss, grads, optimizer_states = self.train_step(
+            variables, loss, grads, optimizer_states, grad_norm, ce_loss = self.train_step(
                 model, variables, optimizer_states, input_data, output_data, subkey, grads, grad_step=update_weights
             )
 
-            grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
             loss_value = float(loss[0])
-            grad_norm_value = float(grad_norm)
+            grad_norm_value = float(grad_norm[0])
+            ce_loss_value = float(ce_loss[0])
 
-            pbar.set_description(f"loss={loss_value:.4f}, grad_norm={grad_norm_value:.2f}")
+            pbar.set_description(f"loss={loss_value:.4f}, ce={ce_loss_value:.4f}, grad_norm={grad_norm_value:.2f}")
+            
+            # W&B Logging
+            if update_weights and self.training_config.use_wandb:
+                # Calculate useful metrics
+                effective_grad_steps = (idx + 1) // grad_accum_step_size  # Number of actual optimizer updates
+                tokens_seen = (idx + 1) * self.training_config.batch_size * self.training_config.seq_len
+                effective_batch_size = self.training_config.batch_size * grad_accum_step_size
+                
+                wandb.log({
+                    "train/loss": loss_value,
+                    "train/ce_loss": ce_loss_value,
+                    "train/grad_norm": grad_norm_value,
+                    "step": idx,
+                    "metrics/effective_grad_steps": effective_grad_steps,
+                    "metrics/tokens_seen": tokens_seen,
+                    "metrics/effective_batch_size": effective_batch_size,
+                })
 
-            if not update_weights:
-                prev_grad_norm=grad_norm
-            else:
-                prev_grad_norm=0
+            # Periodic Checkpointing
+            if (idx + 1) % self.training_config.save_every == 0:
+                save_checkpoint(variables, optimizer_states, idx + 1, self.training_config.checkpoint_dir)
+
+            # Periodic Validation / Generation
+            if (idx + 1) % self.training_config.val_every == 0:
+                gen_key, key = jax.random.split(key)
+                
+                # Efficient Validation Loss
+                val_losses = []
+                if val_gen:
+                    for _ in range(self.training_config.val_batches):
+                        try:
+                            v_input, v_output = next(val_gen)
+                        except StopIteration:
+                            val_gen = val_dataset.data_loader()
+                            v_input, v_output = next(val_gen)
+                        
+                        # Validation runs on single GPU - no need to resize
+                        v_loss = self._val_step(model, variables, v_input, v_output, gen_key)
+                        val_losses.append(float(v_loss))
+                
+                avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else 0.0
+                sample = generate(model, variables['params'], tokenizer, key=gen_key)
+                
+                print(f"\n[Step {idx+1}] Val Loss: {avg_val_loss:.4f} | Generated: {sample}\n")
+                if self.training_config.use_wandb:
+                    wandb.log({
+                        "val/loss": avg_val_loss,
+                        "val/generated_text": wandb.Html(sample), 
+                        "step": idx+1
+                    })
+
+        if self.training_config.use_wandb:
+            wandb.finish()
+
 
 
 if __name__=='__main__':
@@ -175,7 +272,6 @@ if __name__=='__main__':
         num_shared_experts=2,      # Shared experts (general number = 2)
         num_routing_experts=3,      # Total routing experts available
         num_selected_experts=2,     # Top-k selection (selects top 2 out of 6)
-        expert_dim=512,           # Hidden dimension for expert FFNs
         activation=Activation.RELU,
         router_type=RouterType.LEARNED
     )
@@ -184,26 +280,27 @@ if __name__=='__main__':
         mla_config=moe_mla_config,
         moe_ffn_config=moe_ffn_config,
         model_dim=512,
-        transformer_depth=10,
+        transformer_depth=12,
         vocab_length=32_000
     )
     
     moe_train_settings = TrainSettings(
         optimizer='adam',
-        lr=1e-6,                    # Lower learning rate for MOE models
-        num_epochs=20,
-        batch_size=8,              # Smaller batch size due to MOE complexity
-        cur_steps=0,
-        cur_epoch=0,
+        lr=1e-5,                    # Lower learning rate for MOE models
+        batch_size=4,              # Reduced for stability/OOM
         resume_ckpt=False,
-        train_steps=100000,
-        seq_len=1000,
+        train_steps=1000000,
+        seq_len=1024,
         prng_key=jax.random.PRNGKey(42),
-        data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_test_tineystoruies_train'),
-        grad_accumulation=4,
-        num_gpus=2
+        data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
+        val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
+        grad_accumulation=8,
+        num_gpus=1,
+        use_wandb=True,
+        save_every=10000
     )
 
-    dataset=Data(moe_train_settings.data_path,moe_train_settings.batch_size,moe_train_settings.train_steps, moe_train_settings.seq_len)
+    train_dataset=Data(moe_train_settings.data_path,moe_train_settings.batch_size,moe_train_settings.train_steps, moe_train_settings.seq_len)
+    val_dataset=Data(moe_train_settings.val_data_path,moe_train_settings.batch_size,moe_train_settings.train_steps, moe_train_settings.seq_len)
     trainer = Training(moe_train_settings, moe_model_config)
-    trainer.train(dataset)
+    trainer.train(train_dataset, val_dataset)

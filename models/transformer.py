@@ -51,7 +51,7 @@ class DeepSeekModel(nn.Module):
         x=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
         BlockStack = nn.scan(
             TransformerBlock,
-            variable_axes={"params": 0},   # ← separate params per depth
+            variable_axes={"params": 0},   
             split_rngs={"params": True, "gumbel": True},
             variable_broadcast=False,
             length=self.model_config.transformer_depth,
@@ -80,7 +80,6 @@ def test_transformer_forward():
         num_shared_experts=2,
         num_routing_experts=6,
         num_selected_experts=2,
-        expert_dim=1024,
         activation=Activation.RELU,
         router_type=RouterType.LEARNED
     )

@@ -63,8 +63,6 @@ class PreTokenRegistry():
 
         escaped = [re.escape(tok) for tok in self.separating_tokens]
         sep_pattern = "|".join(escaped)
-        print(sep_pattern)
-
         parts = [
             sep_pattern,
             r"'(?:[sdmt]|ll|ve|re)",
