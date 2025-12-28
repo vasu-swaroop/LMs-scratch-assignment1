@@ -7,7 +7,7 @@ import glob
 import re
 import pickle
 import jax
-
+from jaxtyping import Float, Array
 
 def save_checkpoint(variables, optimizer_states, step, checkpoint_dir):
     """
@@ -89,3 +89,4 @@ def resume_from_checkpoint(checkpoint_dir):
     else:
         print("No checkpoints found to resume from.")
         return None, None, 0
+

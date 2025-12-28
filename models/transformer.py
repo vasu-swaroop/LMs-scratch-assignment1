@@ -8,6 +8,7 @@ from tokenizer.tokenizer import Tokenizer
 from models.schemas import ModelConfig, Activation, MLA_config, MOE_FFN_config, RouterType
 from jax import numpy as jnp
 import jax
+from models.base_layers import customDense
 
 from pathlib import Path
 
@@ -63,7 +64,7 @@ class DeepSeekModel(nn.Module):
             moe_ffn_config=self.model_config.moe_ffn_config,
         )(x)
         x= RMSNorm()(x)
-        x= nn.Dense(self.model_config.vocab_length)(x)
+        x= customDense(self.model_config.vocab_length)(x)
         return x
 
 
