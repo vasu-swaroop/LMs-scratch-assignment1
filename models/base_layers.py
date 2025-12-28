@@ -2,39 +2,44 @@ from flax import linen as nn
 from jax import numpy as jnp
 import jax
 from jaxtyping import Float, Array, Int, PRNGKeyArray
-from .schemas import Activation
+from .schemas import Activation, ActivationType
 
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
 
     @nn.compact
-    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False)->Float[Array, 'B ... D_out']:
-        for weight in self.weights[:-1]:
+    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
+        for i, weight in enumerate(self.weights[:-1]):
             x = nn.Dense(weight, use_bias=True)(x)
-            x = self.activation(x)
-        x =nn.Dense(self.weights[-1])(x)
+            if self.activation[1]==ActivationType.MODULE:
+                x=self.activation[0]()(x)
+            else:
+                x=self.activation[0](x)
+        x =nn.Dense(self.weights[-1],use_bias=True)(x)
         if last_layer_act:
-            x=self.activation(x)
-
+            if self.activation[1]==ActivationType.MODULE:
+                x=self.activation[0]()(x)
+            else:
+                x=self.activation[0](x)
         x=RMSNorm()(x)
         return x
 
     def __post_init__(self):
         super().__post_init__()
         assert len(self.weights) >= 2, "Need input + output layer"
-        assert all(w > 0 for w in self.weights)
 
 class RMSNorm(nn.Module):
     epsilon: float= 1e-6
 
-    def sqr_sum(self, x):
+    def sqr_sum(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
         return jnp.mean(x**2, axis=-1,keepdims=True)
 
     @nn.compact
-    def __call__(self, x:Float[Array,'B ... D']):
+    def __call__(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
+        gain=self.param('gain',nn.initializers.constant(1), ())
         sq_sum= self.sqr_sum(x)
-        return x / (jnp.sqrt(sq_sum) +self.epsilon)
+        return x / (jnp.sqrt(sq_sum) +self.epsilon)*gain
 
 def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
    y=jnp.permute_dims(y, (0,1,3,2))
@@ -105,6 +110,7 @@ def test_mlp_forward():
     rng=jax.random.PRNGKey(42)
     inp=jnp.ones((1000,128))
     model_var=mlp.init(rng,inp)
+    jax.tree_util.tree_map(lambda x: jnp.zeros_like, model_var['params'])
     inp=jnp.ones((1000,128))
     out=mlp.apply(model_var, inp)     
     print(out.shape)
