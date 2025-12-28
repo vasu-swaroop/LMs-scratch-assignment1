@@ -46,12 +46,12 @@ class TrainSettings:
     prng_key: PRNGKeyArray
     grad_accumulation: int
     num_gpus:int
-    checkpoint_dir: str = "checkpoints"
+    checkpoint_dir: str = "checkpoints/learned_gelu"
     save_every: int = 20000
     val_every: int = 5000
     val_batches: int = 1
     wandb_project: str = "LM-Training-Scratch"
-    wandb_run_name: str = "TinyStoriesOverfiting-100Lines"
+    wandb_run_name: str = "TinyStoriesOverfiting-100Lines-LGelu-RMSNormEnd"
     use_wandb: bool = False
     
 class Training():
@@ -272,7 +272,7 @@ if __name__=='__main__':
         num_shared_experts=2,      # Shared experts (general number = 2)
         num_routing_experts=3,      # Total routing experts available
         num_selected_experts=2,     # Top-k selection (selects top 2 out of 6)
-        activation=Activation.RELU,
+        activation=Activation.LGELU.value,
         router_type=RouterType.LEARNED
     )
     
@@ -287,15 +287,15 @@ if __name__=='__main__':
     moe_train_settings = TrainSettings(
         optimizer='adam',
         lr=1e-5,                    # Lower learning rate for MOE models
-        batch_size=4,              # Reduced for stability/OOM
+        batch_size=2,              # Reduced for stability/OOM
         resume_ckpt=False,
         train_steps=1000000,
         seq_len=1024,
         prng_key=jax.random.PRNGKey(42),
         data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
         val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
-        grad_accumulation=8,
-        num_gpus=1,
+        grad_accumulation=16,
+        num_gpus=2,
         use_wandb=True,
         save_every=10000
     )
