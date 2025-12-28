@@ -15,7 +15,7 @@ import wandb
 import os
 import glob
 import re
-from training.inference import generate
+# from training.inference import generate
 from training.training_utils import save_checkpoint, load_checkpoint, resume_from_checkpoint
 jax.config.update("jax_log_compiles", True)
 # jax.config.update("jax_default_matmul_precision", "bfloat16")
@@ -51,7 +51,7 @@ class TrainSettings:
     val_every: int = 5000
     val_batches: int = 1
     wandb_project: str = "LM-Training-Scratch"
-    wandb_run_name: str = "TinyStoriesOverfiting-100Lines-LGelu-RMSNormEnd"
+    wandb_run_name: str = "TinyStoriesOverfiting-100Lines-LGelu-RMSNormEnd_trunc_norm_init"
     use_wandb: bool = False
     
 class Training():
@@ -243,13 +243,13 @@ class Training():
                         val_losses.append(float(v_loss))
                 
                 avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else 0.0
-                sample = generate(model, variables['params'], tokenizer, key=gen_key)
+                # sample = generate(model, variables['params'], tokenizer, key=gen_key)
                 
-                print(f"\n[Step {idx+1}] Val Loss: {avg_val_loss:.4f} | Generated: {sample}\n")
+                print(f"\n[Step {idx+1}] Val Loss: {avg_val_loss:.4f}")
                 if self.training_config.use_wandb:
                     wandb.log({
                         "val/loss": avg_val_loss,
-                        "val/generated_text": wandb.Html(sample), 
+                        # "val/generated_text": wandb.Html(sample), 
                         "step": idx+1
                     })
 
@@ -296,7 +296,7 @@ if __name__=='__main__':
         val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
         grad_accumulation=16,
         num_gpus=2,
-        use_wandb=True,
+        use_wandb=False,
         save_every=10000
     )
 

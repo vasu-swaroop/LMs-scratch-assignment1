@@ -8,7 +8,13 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+from jax import numpy as jnp
+from torch import nn
+import numpy as np
 
+
+def convert_to_jax_tensor(inp):
+    return jnp.array(inp.detach().cpu().numpy())
 
 def run_linear(
     d_in: int,
@@ -28,9 +34,16 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    from models.base_layers import customDense
 
-    raise NotImplementedError
+    weights_jax = convert_to_jax_tensor(weights).T
+    in_features_jax convert_to_jax_tensor(in_features)
 
+    model = customDense(d_out)
+
+    variables = {'params': {'weight': weights_jax}}
+    output_jax = model.apply(variables, in_features_jax)
+    return torch.from_numpy(np.array(output_jax))
 
 def run_embedding(
     vocab_size: int,

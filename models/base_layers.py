@@ -4,6 +4,26 @@ import jax
 from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation, ActivationType
 
+from typing import Optional
+def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.float32):
+    fan_in, fan_out=weight_shape
+    #Controls variance
+    std=(2/(fan_in+fan_out))**0.5
+    weights=jax.random.truncated_normal(init_key, -3*std,3*std, weight_shape, dtype=dtype) 
+    return weights
+
+class customDense(nn.Module):
+    out_shape: int
+    in_shape: Optional[int]=None
+    dtype: jnp.dtype= jnp.float32
+    @nn.compact
+    def __call__(self,x:Float[Array, 'B ... D_in'])->Float[Array, 'B ... D_out']:
+        if not self.in_shape:
+            in_shape=x.shape[-1]
+        weights=self.param('weight', trunc_init,(in_shape, self.out_shape))
+        out= jnp.matmul(x, weights)
+        return out
+
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
@@ -11,12 +31,12 @@ class FFN(nn.Module):
     @nn.compact
     def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
         for i, weight in enumerate(self.weights[:-1]):
-            x = nn.Dense(weight, use_bias=True)(x)
+            x = customDense(weight)(x)
             if self.activation[1]==ActivationType.MODULE:
                 x=self.activation[0]()(x)
             else:
                 x=self.activation[0](x)
-        x =nn.Dense(self.weights[-1],use_bias=True)(x)
+        x =customDense(self.weights[-1])(x)
         if last_layer_act:
             if self.activation[1]==ActivationType.MODULE:
                 x=self.activation[0]()(x)
@@ -126,6 +146,13 @@ def test_rope_forward():
 
     print(out.shape)
 
+def test_cutom_dense():
+    rng=jax.random.PRNGKey(3435)
+    inp=jnp.ones((1000,123,128))
+    dtype=jnp.bfloat16
+    model=customDense(20)
+    vars_=model.init(rng, inp)
+    out=model.apply(vars_, inp)
 if __name__== "__main__":
-    test_rope_forward()
+    test_cutom_dense()
 

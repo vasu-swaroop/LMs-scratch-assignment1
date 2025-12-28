@@ -6,6 +6,7 @@ from models.schemas import MLA_config, MOE_FFN_config, RouterType
 from flax import linen as nn
 from models.schemas import Activation
 from einops import rearrange
+from models.base_layers import customDense
 class MLA_rope(nn.Module):
     '''Currently implementing non rope, non kv cache implementation'''
     config: MLA_config
@@ -13,22 +14,22 @@ class MLA_rope(nn.Module):
 
     def setup(self):
         config=self.config
-        self.Q_d=nn.Dense(config.latent_dim_q) # B S D-> B S d
-        self.KV_d=nn.Dense(config.latent_dim_kv) #  B S D-> B S d'
+        self.Q_d=customDense(config.latent_dim_q) # B S D-> B S d
+        self.KV_d=customDense(config.latent_dim_kv) #  B S D-> B S d'
 
-        self.Q_u_c=nn.Dense(config.dim_content*config.num_heads) # B S d-> B S (h*c)
-        self.K_u_c=nn.Dense(config.dim_content) # B S d-> B S (h*c)
+        self.Q_u_c=customDense(config.dim_content*config.num_heads) # B S d-> B S (h*c)
+        self.K_u_c=customDense(config.dim_content) # B S d-> B S (h*c)
 
-        self.Q_u_p=nn.Dense(config.dim_pos*config.num_heads) # B S d-> B S (h*p)
-        self.K_u_p=nn.Dense(config.dim_pos) # B S d-> B S (h*p)
+        self.Q_u_p=customDense(config.dim_pos*config.num_heads) # B S d-> B S (h*p)
+        self.K_u_p=customDense(config.dim_pos) # B S d-> B S (h*p)
         # NOTE: In the paper, the Rope for K is only done once, (possibly for benefit of caching)
 
-        self.V_U=nn.Dense(config.dim_content) # B S d -> B S (h*c)
+        self.V_U=customDense(config.dim_content) # B S d -> B S (h*c)
         self.rope=Rope(self.model_dim)
 
         hidden_dim=self.config.dim_content+self.config.dim_pos
 
-        self.up_proj= nn.Dense(self.model_dim)
+        self.up_proj= customDense(self.model_dim)
 
         self.attention=Attention(hidden_dim)
         

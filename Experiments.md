@@ -53,6 +53,10 @@
 - **Observation**
 - - Grad norms became very stable
 - - The losses were also much lower 
+##### 3.3
+- Added truncated initialization, removed the bias terms in FFN
+- **Run** : []
+- **Observation**
 
 
 # TODO List
