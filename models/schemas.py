@@ -1,14 +1,18 @@
 from enum import Enum
 from flax import linen as nn
 from dataclasses import dataclass
+from models.activations import LearnedGelu
+
+class ActivationType(Enum):
+    CALLABLE = "callable"
+    MODULE = "module"
+
 
 class Activation(Enum):
-    RELU = nn.relu
-    GELU = nn.gelu
-    SWISH = nn.swish
-    # SWIGLU
-    def __call__(self, x):
-        return self.value(x)
+    RELU = (nn.relu, ActivationType.CALLABLE)
+    GELU = (nn.gelu,ActivationType.CALLABLE)
+    SWISH = (nn.swish,ActivationType.CALLABLE)
+    LGELU = (LearnedGelu, ActivationType.MODULE)
 
 class RouterType(Enum):
     LEARNED = "learned"

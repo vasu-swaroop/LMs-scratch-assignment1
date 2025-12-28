@@ -62,6 +62,7 @@ class DeepSeekModel(nn.Module):
             model_dim=self.model_config.model_dim,
             moe_ffn_config=self.model_config.moe_ffn_config,
         )(x)
+        x= RMSNorm()(x)
         x= nn.Dense(self.model_config.vocab_length)(x)
         return x
 
