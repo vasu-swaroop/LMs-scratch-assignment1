@@ -16,7 +16,7 @@ class Document():
     def sample_text(self, seq_len):
         out_arr = self.np_array[self.cur_pos:self.cur_pos+seq_len]
         # Randomly advance or slightly backtrack to vary the sequence start
-        self.cur_pos += 1
+        # self.cur_pos += 1
         
         # If we reach the end, reset or pad
         if len(out_arr) < seq_len:

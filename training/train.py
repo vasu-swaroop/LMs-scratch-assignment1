@@ -51,8 +51,8 @@ class TrainSettings:
     val_every: int = 5000
     val_batches: int = 1
     wandb_project: str = "LM-Training-Scratch"
-    wandb_run_name: str = "TinyStoriesOverfiting-100Lines-LGelu-RMSNormEnd_trunc_norm_init"
-    use_wandb: bool = False
+    wandb_run_name: str = "CorrectRMSNorm_TinyStoriesOverfiting-100Lines-LGelu-RMSNormEnd_trunc_init_minibatch_noexpert_only_lr"
+    use_wandb: bool = True
     
 class Training():
     def __init__(self, training_settings:TrainSettings, model_settings:ModelConfig):
@@ -270,7 +270,7 @@ if __name__=='__main__':
     
     moe_ffn_config = MOE_FFN_config(
         num_shared_experts=2,      # Shared experts (general number = 2)
-        num_routing_experts=3,      # Total routing experts available
+        num_routing_experts=2,      # Total routing experts available
         num_selected_experts=2,     # Top-k selection (selects top 2 out of 6)
         activation=Activation.LGELU.value,
         router_type=RouterType.LEARNED
@@ -296,7 +296,7 @@ if __name__=='__main__':
         val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
         grad_accumulation=16,
         num_gpus=2,
-        use_wandb=False,
+        use_wandb=True,
         save_every=10000
     )
 

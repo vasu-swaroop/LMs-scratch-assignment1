@@ -37,7 +37,7 @@ def run_linear(
     from models.base_layers import customDense
 
     weights_jax = convert_to_jax_tensor(weights).T
-    in_features_jax convert_to_jax_tensor(in_features)
+    in_features_jax = convert_to_jax_tensor(in_features)
 
     model = customDense(d_out)
 
@@ -63,6 +63,15 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    from models.base_layers import customEmbedding
+    weights=convert_to_jax_tensor(weights)
+    token_ids=convert_to_jax_tensor(token_ids)
+
+    variables={'params':{'embed':weights}}
+
+    out=customEmbedding(vocab_size, d_model).apply(variables, token_ids)
+
+    return torch.from_numpy(np.array(out))
 
     raise NotImplementedError
 
@@ -213,6 +222,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
+    from models.base_layers import Rope
+
+    Rope() 
     raise NotImplementedError
 
 
@@ -300,7 +312,7 @@ def run_transformer_lm(
     weights: dict[str, Tensor],
     in_indices: Int[Tensor, " batch_size sequence_length"],
 ) -> Float[Tensor, " batch_size sequence_length vocab_size"]:
-    """Given the weights of a Transformer language model and input indices,
+    r"""Given the weights of a Transformer language model and input indices,
     return the output of running a forward pass on the input indices.
 
     This function should use RoPE.
@@ -391,6 +403,13 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
+    from models.base_layers import RMSNorm
+
+    in_features=convert_to_jax_tensor(in_features)
+    weights=convert_to_jax_tensor(weights)
+    vars_={'params':{'gain':weights}}
+    return RMSNorm(d_model, eps).apply(vars_, in_features)
+
     raise NotImplementedError
 
 

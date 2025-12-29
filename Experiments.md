@@ -57,16 +57,29 @@
 - Added truncated initialization, removed the bias terms in FFN
 - **Run** : []
 - **Observation**
+#### 4. Switched to Minibatch overfitinh
+##### Modifiactions
+###### Exp 1
+1. Only minibatch overfiting
+2. Removed the MOE-gumbel head
+###### Exp 2
+1. Reduced the seq_len and increased depth, increased the LR
+2. The loss came nice like expected
+TODO: Ablate if it was depth or the seq_len. My gut says it was the seq_len, given a model_dim.
+3. Post ablation, the issue was with learning rate only. Need to add a LR scheduler
+BUGS: FFN output was undergoing RMS norm, RMS norm impplementation was non standard. Made it better and tested
 
 
 # TODO List
-[] Add smarter innitialization
-[] Remove bias term in FFN
+[v] Add smarter innitialization
+[v] Remove bias term in FFN
 [] In mixed precision, make sure to upcast properly
 [] Benchmark against Swiglu
 [] Implement softmax 
 [] Implement masking
-
+[] Add a lr scheduler
+[] Implement SWIGLU
+[] Implement Canonical ROPE
 ---
 
 ### Strategy & Future Steps
