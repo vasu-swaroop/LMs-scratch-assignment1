@@ -8,7 +8,7 @@ from tokenizer.tokenizer import Tokenizer
 from models.schemas import ModelConfig, Activation, MLA_config, MOE_FFN_config, RouterType
 from jax import numpy as jnp
 import jax
-from models.base_layers import customDense
+from models.base_layers import customDense, customEmbedding
 
 from pathlib import Path
 
@@ -21,23 +21,16 @@ class TransformerBlock(nn.Module):
     @nn.compact
     def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
         stream=x
-        x=RMSNorm()(x)
+        x=RMSNorm(self.model_dim)(x)
         pos=jnp.arange(x.shape[1])[None, :].repeat(x.shape[0], 0)
         x=MLA_rope(self.mla_config, self.model_dim)(x,use_cache=False, pos=pos)
         stream=x+stream
-        x=RMSNorm()(stream)
+        x=RMSNorm(self.model_dim)(stream)
         x=MOE_FFN(config=self.moe_ffn_config, model_dim=self.model_dim)(x)
         stream=x+stream
         return stream, 1
 
 
-class Embedding(nn.Module):
-    vocab_length: int
-    model_dim: int
-
-    @nn.compact
-    def __call__(self, token_idx_list: Int[Array, 'B S']) -> Float[Array, 'B S D']:
-        return nn.Embed(self.vocab_length, self.model_dim)(token_idx_list)
 
 
 class Sampling():
@@ -49,7 +42,7 @@ class DeepSeekModel(nn.Module):
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
 
-        x=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
+        x=customEmbedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
         BlockStack = nn.scan(
             TransformerBlock,
             variable_axes={"params": 0},   
@@ -63,7 +56,7 @@ class DeepSeekModel(nn.Module):
             model_dim=self.model_config.model_dim,
             moe_ffn_config=self.model_config.moe_ffn_config,
         )(x)
-        x= RMSNorm()(x)
+        x= RMSNorm(self.model_config.model_dim)(x)
         x= customDense(self.model_config.vocab_length)(x)
         return x
 

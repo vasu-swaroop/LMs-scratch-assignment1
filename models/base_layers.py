@@ -24,6 +24,17 @@ class customDense(nn.Module):
         out= jnp.matmul(x, weights)
         return out
 
+class customEmbedding(nn.Module):
+    vocab_size:int
+    embedding_size:int
+
+    def take_element(self, embed_table, idx):
+        return embed_table.at[idx].get()
+    @nn.compact
+    def __call__(self, x:Int[Array, 'B S'])-> Float[Array, 'B S D']:
+        embed_table=self.param('embed',trunc_init, (self.vocab_size, self.embedding_size))
+        embeddings= jax.vmap(self.take_element,in_axes=(None,0))(embed_table, x)
+        return embeddings
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
@@ -42,7 +53,7 @@ class FFN(nn.Module):
                 x=self.activation[0]()(x)
             else:
                 x=self.activation[0](x)
-        x=RMSNorm()(x)
+        # x=RMSNorm()(x) #TODO original FFN did not have this
         return x
 
     def __post_init__(self):
@@ -50,16 +61,17 @@ class FFN(nn.Module):
         assert len(self.weights) >= 2, "Need input + output layer"
 
 class RMSNorm(nn.Module):
+    d_model: int 
     epsilon: float= 1e-6
-
     def sqr_sum(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
         return jnp.mean(x**2, axis=-1,keepdims=True)
 
     @nn.compact
     def __call__(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
-        gain=self.param('gain',nn.initializers.constant(1), ())
+        gain=self.param('gain',nn.initializers.constant(1), (self.d_model))
         sq_sum= self.sqr_sum(x)
-        return x / (jnp.sqrt(sq_sum) +self.epsilon)*gain
+        denom=jnp.mean(jnp.sqrt(sq_sum),axis=-1)+self.epsilon
+        return x /denom[...,None] *gain
 
 def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
    y=jnp.permute_dims(y, (0,1,3,2))
@@ -69,10 +81,11 @@ def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> 
 
 class pos_to_freq(nn.Module):
     model_dim:int
+    theta: int= 10000
     @nn.compact
     def __call__(self, pos:Int[Array, 'B S']):
         freq=-2*pos/self.model_dim
-        freq= 10000**freq
+        freq= self.theta**freq
         return freq  
 
 class Rope(nn.Module):
@@ -153,6 +166,15 @@ def test_cutom_dense():
     model=customDense(20)
     vars_=model.init(rng, inp)
     out=model.apply(vars_, inp)
+
+def test_custom_embedding():
+    rng=jax.random.PRNGKey(3435)
+    inp=jnp.ones((1000,128), dtype=jnp.int16)
+    model=customEmbedding(2048, 14043)
+    vars_= model.init(jax.random.PRNGKey(42), inp)
+    out= model.apply(vars_, inp)
+    print(out.shape)
+# class test_custom_embed():
 if __name__== "__main__":
-    test_cutom_dense()
+    test_custom_embedding()
 
