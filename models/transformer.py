@@ -39,6 +39,7 @@ class Sampling():
 class DeepSeekModel(nn.Module):
     model_config: ModelConfig
 
+    # @jax.jit
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
 

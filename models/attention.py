@@ -41,7 +41,7 @@ class MLA_rope(nn.Module):
         x=jnp.repeat(x, self.config.num_heads, axis=-1)
         return x
 
-    def __call__(self, x:Float[Array, 'B S D'], use_cache:bool=False, pos:Int[Array, 'B S']=None)-> Float[Array, 'B S D']:
+    def __call__(self, x:Float[Array, 'B S D'], build_cache:bool=False, use_cache:bool=False, pos:Int[Array, 'B S']=None,seq_idx:int=0)-> Float[Array, 'B S D']:
         B,S,D= x.shape
         if use_cache:
             assert S==1, "Cache only supported during inference"
@@ -58,10 +58,17 @@ class MLA_rope(nn.Module):
         k_r=self.K_u_p(kv_latent) # B S d_p,  B 1 d_p for inf
         k_r=self.rope(k_r, pos) # B S (d_p)
 
-        if use_cache:
+        if build_cache:
+            NUM_BLOCKS=8
+            BLOCK_SIZE=128
+            kv_latent_cache=jnp.zeros(NUM_BLOCKS, BLOCK_SIZE,self.config.latent_dim_kv)
+            k_r_cache=jnp.zeros(NUM_BLOCKS, BLOCK_SIZE,self.config.latent_dim_kv)
+            
             kv_latent_cached= self.cache["kv_latent"] # B S_old d'
             k_r_Cached= self.cache["k_rope"] #  B S_old d_p,
+            
 
+        if use_cache:
             #Change latents
             kv_latent= jnp.concat([kv_latent_cached, kv_latent], axis=1) # B S_old+1, d'
             k_r= jnp.concat([k_r_Cached, k_r], axis=1) # B S_old+1, d_p
