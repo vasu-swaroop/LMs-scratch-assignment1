@@ -5,7 +5,7 @@ from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation, ActivationType
 
 from typing import Optional
-def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.float32):
+def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.bfloat16):
     fan_in, fan_out=weight_shape
     #Controls variance
     std=(2/(fan_in+fan_out))**0.5
@@ -14,31 +14,32 @@ def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.float32):
 
 class customDense(nn.Module):
     out_shape: int
-    in_shape: Optional[int]=None
-    dtype: jnp.dtype= jnp.float32
+    in_shape: int | None=None
+    dtype: jnp.dtype= jnp.bfloat16
     @nn.compact
     def __call__(self,x:Float[Array, 'B ... D_in'])->Float[Array, 'B ... D_out']:
         if not self.in_shape:
             in_shape=x.shape[-1]
-        weights=self.param('weight', trunc_init,(in_shape, self.out_shape))
+        weights=self.param('weight', trunc_init,(in_shape, self.out_shape), dtype=self.dtype)
         out= jnp.matmul(x, weights)
         return out
 
 class customEmbedding(nn.Module):
     vocab_size:int
     embedding_size:int
+    dtype: jnp.dtype= jnp.bfloat16
 
     def take_element(self, embed_table, idx):
         return embed_table.at[idx].get()
     @nn.compact
     def __call__(self, x:Int[Array, 'B S'])-> Float[Array, 'B S D']:
-        embed_table=self.param('embed',trunc_init, (self.vocab_size, self.embedding_size))
+        embed_table=self.param('embed',trunc_init, (self.vocab_size, self.embedding_size), dtype=self.dtype)
         embeddings= jax.vmap(self.take_element,in_axes=(None,0))(embed_table, x)
         return embeddings
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
-
+    dtype: jnp.dtype= jnp.bfloat16
     @nn.compact
     def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
         for i, weight in enumerate(self.weights[:-1]):
@@ -63,12 +64,14 @@ class FFN(nn.Module):
 class RMSNorm(nn.Module):
     d_model: int 
     epsilon: float= 1e-6
+    dtype: jnp.dtype= jnp.bfloat16
+
     def sqr_sum(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
         return jnp.mean(x**2, axis=-1,keepdims=True)
 
     @nn.compact
     def __call__(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
-        gain=self.param('gain',nn.initializers.constant(1), (self.d_model))
+        gain=self.param('gain',nn.initializers.constant(1), (self.d_model), dtype=self.dtype)
         sq_sum= self.sqr_sum(x)
         denom=jnp.mean(jnp.sqrt(sq_sum),axis=-1)+self.epsilon
         return x /denom[...,None] *gain
@@ -90,13 +93,15 @@ class pos_to_freq(nn.Module):
 
 class Rope(nn.Module):
     model_dim:int
+    dtype: jnp.dtype= jnp.bfloat16
+
     @nn.compact
     def __call__(self, x:Float[Array, '... D'], pos:Float[Array, 'S'])-> Float[Array, '... D']:        
         pos=pos_to_freq(self.model_dim)(pos)
         pos=pos[:,:,None]
 
-        cos_pos=jnp.cos(pos)
-        sin_pos=jnp.sin(pos)
+        cos_pos=jnp.cos(pos).astype(self.dtype)
+        sin_pos=jnp.sin(pos).astype(self.dtype)
 
         half_dim=x.shape[-1]//2
         even=x[...,:half_dim] # 'B S H D//2' or  B S D//2
