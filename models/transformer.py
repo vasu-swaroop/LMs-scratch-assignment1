@@ -19,7 +19,8 @@ class TransformerBlock(nn.Module):
     moe_ffn_config: MOE_FFN_config
 
     @nn.compact
-    def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
+    def __call__(self, x:Float[Array, 'B S D'], carry)-> tuple[object, Float[Array, "B S D"]]:
+
         stream=x
         x=RMSNorm(self.model_dim)(x)
         pos=jnp.arange(x.shape[1])[None, :].repeat(x.shape[0], 0)
@@ -28,7 +29,7 @@ class TransformerBlock(nn.Module):
         x=RMSNorm(self.model_dim)(stream)
         x=MOE_FFN(config=self.moe_ffn_config, model_dim=self.model_dim)(x)
         stream=x+stream
-        return stream, 1
+        return x,carry
 
 
 
@@ -38,7 +39,7 @@ class Sampling():
 
 class DeepSeekModel(nn.Module):
     model_config: ModelConfig
-
+    dtype: jnp.dtype | None = jnp.bfloat16
     # @jax.jit
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
@@ -56,7 +57,7 @@ class DeepSeekModel(nn.Module):
             mla_config=self.model_config.mla_config,
             model_dim=self.model_config.model_dim,
             moe_ffn_config=self.model_config.moe_ffn_config,
-        )(x)
+        )(x,None)
         x= RMSNorm(self.model_config.model_dim)(x)
         x= customDense(self.model_config.vocab_length)(x)
         return x

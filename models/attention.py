@@ -12,6 +12,7 @@ class MLA_rope(nn.Module):
     config: MLA_config
     model_dim: int
 
+
     def setup(self):
         config=self.config
         self.Q_d=customDense(config.latent_dim_q) # B S D-> B S d
@@ -40,7 +41,7 @@ class MLA_rope(nn.Module):
     def kv_to_heads(self,x:Float[Array, 'B S D'])->Float[Array, 'B S hD']:
         x=jnp.repeat(x, self.config.num_heads, axis=-1)
         return x
-
+    
     def __call__(self, x:Float[Array, 'B S D'], build_cache:bool=False, use_cache:bool=False, pos:Int[Array, 'B S']=None,seq_idx:int=0)-> Float[Array, 'B S D']:
         B,S,D= x.shape
         if use_cache:
@@ -92,6 +93,7 @@ class MLA_rope(nn.Module):
 class MOE_FFN(nn.Module):
     config: MOE_FFN_config
     model_dim:int
+    dtype: jnp.dtype | None = jnp.bfloat16
 
     def setup(self):
         self.shared_experts = nn.vmap(
@@ -128,14 +130,15 @@ class MOE_FFN(nn.Module):
         logits=self.router(x)
         key = self.make_rng('gumbel')
         router_probs, _=gumbel_softmax(logits, key, temprature=0.1) 
+        router_probs=router_probs.astype(self.dtype)
         chosen_experts=jax.lax.top_k(router_probs, k=self.config.num_selected_experts, axis=-1)[1]
         
         one_hot_vectors = jax.nn.one_hot(chosen_experts, self.config.num_routing_experts)
+        one_hot_vectors=one_hot_vectors.astype(self.dtype)
         out=jnp.einsum("B S c O,O B S D->c B S D", one_hot_vectors, all_experts)
         out=jnp.sum(out, axis=0)
         
         shared_out_sum = jnp.sum(shared_out, axis=0)
-        
         return out + shared_out_sum 
 
 def test_MOE():

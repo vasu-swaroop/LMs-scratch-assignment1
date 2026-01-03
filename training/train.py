@@ -1,4 +1,4 @@
-from training.optimizer import AdamOptimizer
+from training.optimizer import AdamOptimizer, MuonOptimizer
 import jax
 from jax import numpy as jnp
 from models.transformer import DeepSeekModel
@@ -16,7 +16,7 @@ import os
 import glob
 import re
 from training.scheduler import ChainSchedulers, SchedulerPoint
-from training.inference import generate
+from training.inference import Inference
 from training.training_utils import save_checkpoint, load_checkpoint, resume_from_checkpoint
 jax.config.update("jax_log_compiles", True)
 # jax.config.update("jax_default_matmul_precision", "bfloat16")
@@ -47,12 +47,12 @@ class TrainSettings:
     prng_key: PRNGKeyArray
     grad_accumulation: int
     num_gpus:int
-    checkpoint_dir: str = "checkpoints/learned_gelu"
+    checkpoint_dir: str = "checkpoints/all_data_minibatch/"
     save_every: int = 20000
-    val_every: int = 5000
+    val_every: int = 1000
     val_batches: int = 1
     wandb_project: str = "LM-Training-Scratch"
-    wandb_run_name: str = "AllRMSNorm_LrScheduler_reduced_seq_len_momentum_bias"
+    wandb_run_name: str = "BF16_MinBatchTinyStoriesAllRMSNorm_LrScheduler_reduced_seq_len_momentum_bias"
     use_wandb: bool = True
     
 class Training():
@@ -73,6 +73,8 @@ class Training():
         lr,
         grad_step=True,
     ):
+        optimizer_type = self.training_config.optimizer
+        
         def loss_fn(params, input_ids, targets, rng):
             logits = model.apply({'params': params}, input_ids, rngs={'gumbel': rng})
             ce_loss = cross_entropy_loss(logits, targets)
@@ -94,7 +96,10 @@ class Training():
             grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(new_grads)))
             
             def perform_opt(lr):
-                optimizer = AdamOptimizer()
+                if optimizer_type == 'muon':
+                    optimizer = MuonOptimizer()
+                else:
+                    optimizer = AdamOptimizer()
                 updated_params, updated_opt_state = optimizer.step(params, new_grads, opt_state, lr)
                 reset_grads = jax.tree_util.tree_map(jnp.zeros_like, new_grads)
                 return updated_params, updated_opt_state, reset_grads
@@ -134,13 +139,53 @@ class Training():
 
     def _val_step(self, model, variables, input_data, out_data, key):
         """Validation step runs on a single GPU for simplicity."""
-        def loss_fn(params, input_data, target_data, key):
-            out = model.apply({'params': params}, input_data, rngs={'gumbel': key})
-            return cross_entropy_loss(out, target_data)
+        # Cache JIT-compiled validation function like training step
+        if not hasattr(self, '_jitted_val_loss'):
+            def loss_fn(params, input_data, target_data, key):
+                out = model.apply({'params': params}, input_data, rngs={'gumbel': key})
+                return cross_entropy_loss(out, target_data)
+            self._jitted_val_loss = jax.jit(loss_fn)
 
         # Use only the first device's parameters for validation
         params = jax.tree_util.tree_map(lambda x: x[0], variables['params'])
-        return loss_fn(params, input_data, out_data, key)
+        return self._jitted_val_loss(params, input_data, out_data, key)
+
+
+    def _validate_and_generate(self, inference_engine, variables, val_gen, val_dataset, step, key, max_new_tokens=256):
+        gen_key, key = jax.random.split(key)
+        
+        # Efficient Validation Loss
+        val_losses = []
+        if val_gen:
+            for _ in range(self.training_config.val_batches):
+                try:
+                    v_input, v_output = next(val_gen)
+                except (StopIteration, TypeError):
+                    val_gen = val_dataset.data_loader()
+                    v_input, v_output = next(val_gen)
+                
+                # Validation runs on single GPU - no need to resize
+                v_loss = self._val_step(inference_engine.model, variables, v_input, v_output, gen_key)
+                val_losses.append(float(v_loss))
+        
+        avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else 0.0
+        
+        # Update inference engine with current variables and generate
+        single_device_params = jax.tree_util.tree_map(lambda x: x[0], variables['params'])
+        inference_engine.set_variables({'params': single_device_params})
+        sample = inference_engine.generate("Once upon a time", key=gen_key, max_new_tokens=max_new_tokens)
+
+        
+        print(f"\n[Step {step}] Val Loss: {avg_val_loss:.4f}")
+        print(f"Generated: {sample}")
+        
+        if self.training_config.use_wandb:
+            wandb.log({
+                "val/loss": avg_val_loss,
+                "val/generated_text": wandb.Html(sample), 
+                "step": step
+            })
+        return key, val_gen
 
     def resize_for_multinode(self, inp):
         num_gpus=self.training_config.num_gpus
@@ -155,10 +200,12 @@ class Training():
     def train(self, dataset, val_dataset=None):
         # Initialize W&B
         if self.training_config.use_wandb:
+            from dataclasses import asdict
+            wandb_config = {**asdict(self.training_config), **asdict(self.model_config)}
             wandb.init(
                 project=self.training_config.wandb_project,
                 name=self.training_config.wandb_run_name,
-                config=self.training_config.__dict__,
+                config=wandb_config,
                 # id='uf7n20vn',
                 # resume="allow",
             )
@@ -171,20 +218,23 @@ class Training():
         variables = jax.device_put_replicated(
             variables, jax.devices()
         )
-
-        # For generation
-        tokenizer = Tokenizer.load_for_inference(str(self.training_config.checkpoint_dir).replace('checkpoints', 'tokenizer').replace('learned_gelu', 'trained/owt_train/final_0032000_inference.pkl'))
-        # Fallback path if dynamic path manipulation fails or differs
+        print(model.tabulate({'params': key, 'gumbel': key}, input_data))
+        import pdb; pdb.set_trace()
+        # For generation - use Inference class with cached JIT
         default_tokenizer_path = '/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl'
-        if os.path.exists(default_tokenizer_path):
-             tokenizer = Tokenizer.load_for_inference(default_tokenizer_path)
+        tokenizer = Tokenizer.load_for_inference(default_tokenizer_path)
+        inference_engine = Inference(model_config=self.model_config)
+        inference_engine.set_tokenizer(tokenizer)
 
         # Initialize grads with the same replicated structure as variables['params']
         grads = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), variables['params'])
 
         grad_accum_step_size = self.training_config.grad_accumulation
-        # Initialize optimizer states and replicate
-        optimizer_states = AdamOptimizer().init(jax.tree_util.tree_map(lambda x: x[0], variables['params']))
+        # Initialize optimizer states and replicate based on optimizer setting
+        if self.training_config.optimizer == 'muon':
+            optimizer_states = MuonOptimizer().init(jax.tree_util.tree_map(lambda x: x[0], variables['params']))
+        else:
+            optimizer_states = AdamOptimizer().init(jax.tree_util.tree_map(lambda x: x[0], variables['params']))
         optimizer_states = jax.device_put_replicated(optimizer_states, jax.devices())
         
         start_step = 0
@@ -199,6 +249,13 @@ class Training():
         steps=[SchedulerPoint(0, 0.0), SchedulerPoint(500, 1e-4), SchedulerPoint(10000, 5e-5), SchedulerPoint(15000, 1e-5)]
         step_scheduler=ChainSchedulers(steps)
         lr=step_scheduler.update(start_step)
+
+        # Initial validation/smoke test at t=0 or upon resumption (max_new_tokens=1 for quick check)
+        key, val_gen = self._validate_and_generate(
+            inference_engine, variables, val_gen, val_dataset, start_step, key, max_new_tokens=256
+        )
+
+
         pbar = tqdm(enumerate(data_gen, start=start_step), total=self.training_config.train_steps, initial=start_step)
         for idx, (input_data, output_data) in pbar:
             input_data, output_data = self.resize_for_multinode(input_data), self.resize_for_multinode(output_data)
@@ -242,38 +299,10 @@ class Training():
 
             # Periodic Validation / Generation
             if (idx + 1) % self.training_config.val_every == 0:
-                gen_key, key = jax.random.split(key)
-                
-                # Efficient Validation Loss
-                val_losses = []
-                if val_gen:
-                    for _ in range(self.training_config.val_batches):
-                        try:
-                            v_input, v_output = next(val_gen)
-                        except StopIteration:
-                            val_gen = val_dataset.data_loader()
-                            v_input, v_output = next(val_gen)
-                        
-                        # Validation runs on single GPU - no need to resize
-                        v_loss = self._val_step(model, variables, v_input, v_output, gen_key)
-                        val_losses.append(float(v_loss))
-                
-                avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else 0.0
-                
-                # Use only the first device's parameters for generation (since variables are replicated)
-                single_device_params = jax.tree_util.tree_map(lambda x: x[0], variables['params'])
-                # Call the imported generate function
-                sample = generate(model, single_device_params, tokenizer, "Once upon a time", key=gen_key)
-                
-                print(f"\n[Step {idx+1}] Val Loss: {avg_val_loss:.4f}")
-                print(f"Generated: {sample}")
-                
-                if self.training_config.use_wandb:
-                    wandb.log({
-                        "val/loss": avg_val_loss,
-                        "val/generated_text": wandb.Html(sample), 
-                        "step": idx+1
-                    })
+                key, val_gen = self._validate_and_generate(
+                    inference_engine, variables, val_gen, val_dataset, idx + 1, key
+                )
+
 
         if self.training_config.use_wandb:
             wandb.finish()
@@ -301,8 +330,8 @@ if __name__=='__main__':
     moe_model_config = ModelConfig(
         mla_config=moe_mla_config,
         moe_ffn_config=moe_ffn_config,
-        model_dim=512,
-        transformer_depth=28,
+        model_dim=1024,
+        transformer_depth=16,
         vocab_length=32_000
     )
     
@@ -318,7 +347,7 @@ if __name__=='__main__':
         val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
         grad_accumulation=16,
         num_gpus=2,
-        use_wandb=True,
+        use_wandb=False,
         save_every=10000
     )
 

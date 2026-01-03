@@ -7,9 +7,9 @@ import os
 
 # Configuration
 tokenizer_path = '/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl'
-root_data_path = '/data3/vasu/projects/LMs-scratch-assignment1/data/TinyStoriesV2-GPT4-train.txt'
-data_set_save_path = Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_train/')
-num_shards = 100
+root_data_path = '/data3/vasu/projects/LMs-scratch-assignment1/data/TinyStoriesV2-GPT4-valid.txt'
+data_set_save_path = Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_valid/')
+num_shards = 10
 
 # Load tokenizer
 tokenizer = Tokenizer.load_for_inference(tokenizer_path)
