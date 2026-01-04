@@ -3,7 +3,7 @@ from jax import numpy as jnp
 import jax
 from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation, ActivationType
-
+from einops import einsum
 from typing import Optional
 def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.bfloat16):
     fan_in, fan_out=weight_shape
@@ -77,9 +77,7 @@ class RMSNorm(nn.Module):
         return x /denom[...,None] *gain
 
 def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
-   y=jnp.permute_dims(y, (0,1,3,2))
-
-   return jnp.matmul(x, y)
+    return einsum( x, y,'b s1 h d, b s2 h d -> b h s1 s2',)
 
 
 class pos_to_freq(nn.Module):
@@ -119,8 +117,10 @@ class Attention(nn.Module):
     def __call__(self, q:Float[Array, 'B S H D'], k:Float[Array, 'B S H D'], v:Float[Array, 'B S H D'])-> Float[Array, 'B S H D']:
         similarity= similarity_dot_prod(q, k)
         similarity= similarity * self.hidden_dim**(-0.5)
-        softmax_scores= nn.softmax(similarity,axis=-1) # B S H D D
-        attention = softmax_scores @ v # B S H D
+        mask=jnp.tril(jnp.ones((q.shape[1], q.shape[1])))
+        similarity_masked=jnp.where(mask, similarity, -jnp.inf)
+        softmax_scores= nn.softmax(similarity_masked,axis=-1) # B S H D D
+        attention = einsum(softmax_scores, v, 'b h s1 s2, b s2 h d-> b s1 h d', )
         return attention
     #TODO: Add masking for causal inference as well
 
