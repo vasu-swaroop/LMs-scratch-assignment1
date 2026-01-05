@@ -14,11 +14,12 @@ def test_softmax_matches_pytorch():
             [0.1573, 0.6860, 0.1327, 0.7284, 0.6811],
         ]
     )
+    import numpy as np
     expected = F.softmax(x, dim=-1)
-    numpy.testing.assert_allclose(run_softmax(x, dim=-1).detach().numpy(), expected.detach().numpy(), atol=1e-6)
+    numpy.testing.assert_allclose(np.asarray(run_softmax(x, dim=-1)), expected.detach().numpy(), atol=1e-6)
     # Test that softmax handles numerical overflow issues
     numpy.testing.assert_allclose(
-        run_softmax(x + 100, dim=-1).detach().numpy(),
+        np.asarray(run_softmax(x + 100, dim=-1)),
         expected.detach().numpy(),
         atol=1e-6,
     )

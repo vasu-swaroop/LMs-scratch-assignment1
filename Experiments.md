@@ -68,18 +68,33 @@
 TODO: Ablate if it was depth or the seq_len. My gut says it was the seq_len, given a model_dim.
 3. Post ablation, the issue was with learning rate only. Need to add a LR scheduler
 BUGS: FFN output was undergoing RMS norm, RMS norm impplementation was non standard. Made it better and tested
+4. Figured out it was code bugs, started triaging things
+# 1. Data loading bugs
+    * Started logging the training data at step t=0
+    * Noticed wrong slicing of data for input and target
+# 2. Attention
+    * Was using matmuls, and ended up attending the head_dim and not the seq_len (fixed that)
+    * Fixed the causal masking in LLM training
+# 3. Added LR scheduling
+# 4. Added Bfloat 16 training (Optimizer state in still in float32)
+# 5. ABlated different model_dim, num_layers, etc. 
+Working runs: https://wandb.ai/vhaatever/LM-Training-Scratch/runs/ddv99ntf? Model_dim 1024
+        runs: https://wandb.ai/vhaatever/LM-Training-Scratch/runs/moliqvob 
+
 
 
 # TODO List
 [v] Add smarter innitialization
 [v] Remove bias term in FFN
-[] In mixed precision, make sure to upcast properly
+[v] In mixed precision, make sure to upcast properly
 [] Benchmark against Swiglu
-[] Implement softmax 
-[] Implement masking
-[] Add a lr scheduler
+[v] Implement softmax 
+[v] Implement masking
+[v] Add a lr scheduler
 [] Implement SWIGLU
 [] Implement Canonical ROPE
+[] Correct the MOE implementation
+[] Implement scaling laws within a budget and automate it
 ---
 
 ### Strategy & Future Steps

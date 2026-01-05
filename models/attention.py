@@ -36,6 +36,7 @@ class MLA_rope(nn.Module):
         
     def split_to_head(self, x:Float[Array, 'B S D'])-> Float[Array, 'B S h D']:
         x=jnp.reshape(x, (x.shape[0],x.shape[1], self.config.num_heads, -1))
+        x =rearrange(x, 'B S h D-> B h S D')
         return x
 
     def kv_to_heads(self,x:Float[Array, 'B S D'])->Float[Array, 'B S hD']:
@@ -85,7 +86,7 @@ class MLA_rope(nn.Module):
 
         
         attention=self.attention(q_tokens, k_tokens, v_tokens)
-        attention=rearrange(attention, 'B S h d-> B S (h d)')
+        attention=rearrange(attention, 'B h S  d-> B S (h d)')
         #Up project
         out_token=self.up_proj(attention)
         return out_token+x

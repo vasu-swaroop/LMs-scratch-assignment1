@@ -119,6 +119,7 @@ dependencies = [
     { name = "einx" },
     { name = "jaxtyping" },
     { name = "numpy" },
+    { name = "prefetch-generator" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "regex" },
@@ -137,6 +138,7 @@ requires-dist = [
     { name = "einx", specifier = ">=0.3.0" },
     { name = "jaxtyping", specifier = ">=0.3.0" },
     { name = "numpy" },
+    { name = "prefetch-generator", specifier = ">=1.0.3" },
     { name = "psutil", specifier = ">=6.1.1" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "regex", specifier = ">=2024.11.6" },
@@ -558,6 +560,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
 ]
+
+[[package]]
+name = "prefetch-generator"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/cf/f6c148289fd87832e9f20428b7e842921efac5313cb3ac5920a424543760/prefetch_generator-1.0.3.tar.gz", hash = "sha256:cefabd51c7ff3cdc1c885e22d287592219fe1ca25623322806370a0ce9acd32b", size = 4592, upload-time = "2022-11-19T14:38:34.21Z" }
 
 [[package]]
 name = "protobuf"

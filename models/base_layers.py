@@ -24,6 +24,10 @@ class customDense(nn.Module):
         out= jnp.matmul(x, weights)
         return out
 
+def softmax(x, axis=-1):
+    x = x - jnp.max(x, axis=axis, keepdims=True)
+    exp_x = jnp.exp(x)
+    return exp_x / jnp.sum(exp_x, axis=axis, keepdims=True)
 class customEmbedding(nn.Module):
     vocab_size:int
     embedding_size:int
@@ -76,8 +80,8 @@ class RMSNorm(nn.Module):
         denom=jnp.mean(jnp.sqrt(sq_sum),axis=-1)+self.epsilon
         return x /denom[...,None] *gain
 
-def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
-    return einsum( x, y,'b s1 h d, b s2 h d -> b h s1 s2',)
+def similarity_dot_prod(key:Float[Array, 'B ... D'], query:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
+    return einsum( key, query,'... s1 d,... s2 d -> ... s1 s2',)
 
 
 class pos_to_freq(nn.Module):
@@ -114,21 +118,21 @@ class Rope(nn.Module):
 class Attention(nn.Module):
     hidden_dim: int
     @nn.compact
-    def __call__(self, q:Float[Array, 'B S H D'], k:Float[Array, 'B S H D'], v:Float[Array, 'B S H D'])-> Float[Array, 'B S H D']:
+    def __call__(self, q:Float[Array, '... S D'], k:Float[Array, '... S D'], v:Float[Array, '... S D'], mask:Float[Array, '... S1 S2']=None)-> Float[Array, '... S D']:
         similarity= similarity_dot_prod(q, k)
         similarity= similarity * self.hidden_dim**(-0.5)
-        mask=jnp.tril(jnp.ones((q.shape[1], q.shape[1])))
+        if mask is None:
+            mask=jnp.tril(jnp.ones((q.shape[-2], k.shape[-2])))
         similarity_masked=jnp.where(mask, similarity, -jnp.inf)
-        softmax_scores= nn.softmax(similarity_masked,axis=-1) # B S H D D
-        attention = einsum(softmax_scores, v, 'b h s1 s2, b s2 h d-> b s1 h d', )
+        softmax_scores= softmax(similarity_masked,axis=-1) # B H S1 S2
+        attention = einsum(softmax_scores, v, '... s1 s2, ... s2 d-> ... s1 d', )
         return attention
-    #TODO: Add masking for causal inference as well
 
 def gumbel_softmax(x:Float[Array, '... D'], key:PRNGKeyArray, temprature:Float=0.1)->Float[Array, '... D']:
     key, subkey=jax.random.split(key)
     gumbel_noise=jax.random.gumbel(subkey, x.shape)
     x=(x+gumbel_noise)/temprature
-    x=nn.softmax(x, axis=-1)
+    x=softmax(x, axis=-1)
     return x, key
     
 def test_attetnion_forward():
