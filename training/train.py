@@ -18,6 +18,8 @@ import re
 from training.scheduler import ChainSchedulers, SchedulerPoint
 from training.inference import Inference
 from training.training_utils import save_checkpoint, load_checkpoint, resume_from_checkpoint
+from prefetch_generator import BackgroundGenerator
+
 jax.config.update("jax_log_compiles", True)
 # jax.config.update("jax_default_matmul_precision", "bfloat16")
 
@@ -196,7 +198,16 @@ class Training():
             *inp.shape[1:]
         )
         return inp
-
+    def log_train_data(self, input_data, output_data):
+        # Flatten the multi-GPU batched data to a 1D list of token IDs
+        input_flat = input_data.flatten()[:512]  # Take first 512 tokens to avoid huge strings
+        output_flat = output_data.flatten()[:512]
+        
+        input_str = self.tokenizer.tokens_to_text(input_flat)
+        output_str = self.tokenizer.tokens_to_text(output_flat)
+        wandb.log({"train/input_str": wandb.Html(input_str), "train/output_str": wandb.Html(output_str)})
+        
+    
     def train(self, dataset, val_dataset=None):
         # Initialize W&B
         if self.training_config.use_wandb:
@@ -210,7 +221,7 @@ class Training():
                 # resume="allow",
             )
 
-        input_data, _ = next(dataset.data_loader())
+        input_data, output_data = next(dataset.data_loader())
         key = self.training_config.prng_key
 
         model = DeepSeekModel(self.model_config)
@@ -219,12 +230,11 @@ class Training():
             variables, jax.devices()
         )
         print(model.tabulate({'params': key, 'gumbel': key}, input_data))
-        import pdb; pdb.set_trace()
         # For generation - use Inference class with cached JIT
         default_tokenizer_path = '/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl'
-        tokenizer = Tokenizer.load_for_inference(default_tokenizer_path)
+        self.tokenizer = Tokenizer.load_for_inference(default_tokenizer_path)
         inference_engine = Inference(model_config=self.model_config)
-        inference_engine.set_tokenizer(tokenizer)
+        inference_engine.set_tokenizer(self.tokenizer)
 
         # Initialize grads with the same replicated structure as variables['params']
         grads = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), variables['params'])
@@ -254,9 +264,9 @@ class Training():
         key, val_gen = self._validate_and_generate(
             inference_engine, variables, val_gen, val_dataset, start_step, key, max_new_tokens=256
         )
+        # self.log_train_data(input_data, output_data)
 
-
-        pbar = tqdm(enumerate(data_gen, start=start_step), total=self.training_config.train_steps, initial=start_step)
+        pbar = tqdm(enumerate(BackgroundGenerator(data_gen,max_prefetch=3), start=start_step), total=self.training_config.train_steps, initial=start_step)
         for idx, (input_data, output_data) in pbar:
             input_data, output_data = self.resize_for_multinode(input_data), self.resize_for_multinode(output_data)
             key, subkey = jax.random.split(key)
@@ -282,6 +292,7 @@ class Training():
                 effective_grad_steps = (idx + 1) // grad_accum_step_size  # Number of actual optimizer updates
                 tokens_seen = (idx + 1) * self.training_config.batch_size * self.training_config.seq_len
                 effective_batch_size = self.training_config.batch_size * grad_accum_step_size
+                
                 wandb.log({
                     "train/loss": loss_value,
                     "train/ce_loss": ce_loss_value,
@@ -302,7 +313,6 @@ class Training():
                 key, val_gen = self._validate_and_generate(
                     inference_engine, variables, val_gen, val_dataset, idx + 1, key
                 )
-
 
         if self.training_config.use_wandb:
             wandb.finish()
@@ -330,24 +340,25 @@ if __name__=='__main__':
     moe_model_config = ModelConfig(
         mla_config=moe_mla_config,
         moe_ffn_config=moe_ffn_config,
-        model_dim=1024,
-        transformer_depth=16,
+        model_dim=512,
+        transformer_depth=32,
         vocab_length=32_000
     )
     
     moe_train_settings = TrainSettings(
         optimizer='adam',
-        lr=1e-4,                    # Lower learning rate for MOE models
+        lr=0.0001,
+        wandb_run_name="causal_masking",
         batch_size=2,              # Reduced for stability/OOM
         resume_ckpt=False,
         train_steps=1000000,
         seq_len=512,
         prng_key=jax.random.PRNGKey(42),
-        data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
-        val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines'),
+        data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_train/'),
+        val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_valid/'),
         grad_accumulation=16,
         num_gpus=2,
-        use_wandb=False,
+        use_wandb=True,
         save_every=10000
     )
 

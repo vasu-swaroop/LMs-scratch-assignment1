@@ -126,6 +126,15 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
+    from models.attention import Attention
+    hidden_dim=Q.shape[-1]
+    Q=convert_to_jax_tensor(Q)
+    K=convert_to_jax_tensor(K)
+    V=convert_to_jax_tensor(V)
+    mask=convert_to_jax_tensor(mask)
+    attn=Attention(hidden_dim)
+    variables={'params':{}}
+    return attn.apply(variables, Q,K,V,mask )
     raise NotImplementedError
 
 
@@ -463,6 +472,9 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
+    from models.base_layers import softmax
+    in_features=convert_to_jax_tensor(in_features)
+    return softmax(in_features, axis=dim)
     raise NotImplementedError
 
 

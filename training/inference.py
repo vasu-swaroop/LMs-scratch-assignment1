@@ -1,5 +1,6 @@
 from tokenizer.tokenizer import Tokenizer
 from dataclasses import dataclass
+from models.base_layers import softmax
 import jax
 from jax import numpy as jnp
 from flax import linen as nn
@@ -37,7 +38,7 @@ def generate(model, params, tokenizer, text, key, max_new_tokens=100, top_p=50, 
         
         logits = out[0][num_tokens-1] / temperature
         logits = logits - logits.max()
-        probs = jax.nn.softmax(logits)
+        probs = softmax(logits)
         
         # Pure JAX sorting - avoid Python loop for GPU efficiency
         sorted_indices = jnp.argsort(probs)[::-1]  # Descending order
@@ -150,7 +151,7 @@ class Inference:
             
             logits = out[0][num_tokens-1] / temperature
             logits = logits - logits.max()
-            probs = jax.nn.softmax(logits)
+            probs = softmax(logits)
             
             # Pure JAX sorting - avoid Python loop for GPU efficiency
             sorted_indices = jnp.argsort(probs)[::-1]  # Descending order
