@@ -2,9 +2,10 @@ from flax import linen as nn
 from jax import numpy as jnp
 import jax
 from jaxtyping import Float, Array, Int, PRNGKeyArray
-from .schemas import Activation, ActivationType
+from .schemas import Activation
 from einops import einsum
-from typing import Optional
+from .activations import softmax
+
 def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.bfloat16):
     fan_in, fan_out=weight_shape
     #Controls variance
@@ -24,10 +25,6 @@ class customDense(nn.Module):
         out= jnp.matmul(x, weights)
         return out
 
-def softmax(x, axis=-1):
-    x = x - jnp.max(x, axis=axis, keepdims=True)
-    exp_x = jnp.exp(x)
-    return exp_x / jnp.sum(exp_x, axis=axis, keepdims=True)
 class customEmbedding(nn.Module):
     vocab_size:int
     embedding_size:int
@@ -40,30 +37,34 @@ class customEmbedding(nn.Module):
         embed_table=self.param('embed',trunc_init, (self.vocab_size, self.embedding_size), dtype=self.dtype)
         embeddings= jax.vmap(self.take_element,in_axes=(None,0))(embed_table, x)
         return embeddings
+
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
     dtype: jnp.dtype= jnp.bfloat16
-    @nn.compact
-    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
-        for i, weight in enumerate(self.weights[:-1]):
-            x = customDense(weight)(x)
-            if self.activation[1]==ActivationType.MODULE:
-                x=self.activation[0]()(x)
-            else:
-                x=self.activation[0](x)
-        x =customDense(self.weights[-1])(x)
-        if last_layer_act:
-            if self.activation[1]==ActivationType.MODULE:
-                x=self.activation[0]()(x)
-            else:
-                x=self.activation[0](x)
-        # x=RMSNorm()(x) #TODO original FFN did not have this
-        return x
-
+    
     def __post_init__(self):
         super().__post_init__()
         assert len(self.weights) >= 2, "Need input + output layer"
+            
+    @nn.compact
+    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
+        act_func=self.activation.value
+        for i, weight in enumerate(self.weights[:-1]):
+            x = customDense(weight)(x)
+            if self.activation in [Activation.SWIGLU]:
+                act_args={"model_dim":weight, "compact_dim":weight*8//3}
+            else:
+                act_args={}
+            x = act_func(name=f"act_{i}",**act_args)(x)
+        x = customDense(self.weights[-1])(x)
+        if last_layer_act:
+            if self.activation in [Activation.SWIGLU]:
+                act_args={"model_dim":weight, "compact_dim":weight*8//3}
+            else:
+                act_args={}
+            x = act_func(name=f"act_{i}",**act_args)(x)
+        return x
 
 class RMSNorm(nn.Module):
     d_model: int 
@@ -89,6 +90,7 @@ class pos_to_freq(nn.Module):
     theta: int= 10000
     @nn.compact
     def __call__(self, pos:Int[Array, 'B S']):
+        B, S = pos.shape
         freq=-2*pos/self.model_dim
         freq= self.theta**freq
         return freq  
@@ -124,7 +126,7 @@ class Attention(nn.Module):
         if mask is None:
             mask=jnp.tril(jnp.ones((q.shape[-2], k.shape[-2])))
         similarity_masked=jnp.where(mask, similarity, -jnp.inf)
-        softmax_scores= softmax(similarity_masked,axis=-1) # B H S1 S2
+        softmax_scores = softmax(similarity_masked, axis=-1) # B H S1 S2
         attention = einsum(softmax_scores, v, '... s1 s2, ... s2 d-> ... s1 d', )
         return attention
 
@@ -132,7 +134,7 @@ def gumbel_softmax(x:Float[Array, '... D'], key:PRNGKeyArray, temprature:Float=0
     key, subkey=jax.random.split(key)
     gumbel_noise=jax.random.gumbel(subkey, x.shape)
     x=(x+gumbel_noise)/temprature
-    x=softmax(x, axis=-1)
+    x = softmax(x, axis=-1)
     return x, key
     
 def test_attetnion_forward():
@@ -171,19 +173,16 @@ def test_rope_forward():
 def test_cutom_dense():
     rng=jax.random.PRNGKey(3435)
     inp=jnp.ones((1000,123,128))
-    dtype=jnp.bfloat16
     model=customDense(20)
     vars_=model.init(rng, inp)
-    out=model.apply(vars_, inp)
+    _ = model.apply(vars_, inp)
 
 def test_custom_embedding():
-    rng=jax.random.PRNGKey(3435)
     inp=jnp.ones((1000,128), dtype=jnp.int16)
     model=customEmbedding(2048, 14043)
     vars_= model.init(jax.random.PRNGKey(42), inp)
     out= model.apply(vars_, inp)
     print(out.shape)
-# class test_custom_embed():
+
 if __name__== "__main__":
     test_custom_embedding()
-
