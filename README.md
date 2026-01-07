@@ -11,6 +11,7 @@ The core logic is manually implemented to maximize learning. AI assistance was u
 5. State saving and loading
 6. tests dir/testing.py files
 7. wandb loggging
+8. Optimizing .md for easier formating people understand
 
 **Also adding a bugs_and_ideas.md file in all directory to keep a track of ideas explored and problems faced**
 
