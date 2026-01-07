@@ -8,6 +8,7 @@ from tokenizer.tokenizer import Tokenizer
 from models.schemas import ModelConfig, Activation, MLA_config, MOE_FFN_config, RouterType
 from jax import numpy as jnp
 import jax
+from models.base_layers import customDense, customEmbedding
 
 from pathlib import Path
 
@@ -18,65 +19,35 @@ class TransformerBlock(nn.Module):
     moe_ffn_config: MOE_FFN_config
 
     @nn.compact
-    def __call__(self, x:Float[Array, 'B S D'])-> Float[Array,'B S D']:
+    def __call__(self, x:Float[Array, 'B S D'], carry)-> tuple[object, Float[Array, "B S D"]]:
+
         stream=x
-        x=RMSNorm()(x)
+        x=RMSNorm(self.model_dim)(x)
         pos=jnp.arange(x.shape[1])[None, :].repeat(x.shape[0], 0)
         x=MLA_rope(self.mla_config, self.model_dim)(x,use_cache=False, pos=pos)
         stream=x+stream
-        x=RMSNorm()(stream)
+        x=RMSNorm(self.model_dim)(stream)
         x=MOE_FFN(config=self.moe_ffn_config, model_dim=self.model_dim)(x)
         stream=x+stream
-        return stream, 1
+        return x,carry
 
 
-class Embedding(nn.Module):
-    vocab_length:int
-    model_dim:int
-        # self.embeddding_dict:dict[int, Float[Array, 'D']]={}
 
-    # def load_embedding(self, embedding_path:Path):
-    #     if embedding_path:
-    #         with open(embedding_path, 'rb') as f:
-    #             self.embedding_dict=pickle.load(f)
 
-    # def save_embedding(self, embedding_path:Path):
-    #     if embedding_path:
-    #         with open(embedding_path, 'wb') as f:
-    #             pickle.dump(self.embedding_dict, f)
-    
-    # def init_emebddings(self, key:PRNGKeyArray,  token_list: list[int]):
-    #     for token in token_list:
-    #         key, subkey=jax.random.split(key)
-    #         self.embeddding_dict[token]=jax.random.normal(key, (self.model_dim))
-
-    # def lookup(self, token:int):
-    #     return self.__call__(token)
-
-    @nn.compact
-    def __call__(self, token_idx_list: Int[Array, 'B S']):
-        embed = self.param(
-            "embedding",
-            nn.initializers.normal(),
-            (self.vocab_length, self.model_dim),
-        )
-        return embed[token_idx_list]
 class Sampling():
     pass
 
 class DeepSeekModel(nn.Module):
     model_config: ModelConfig
-    # embedding_model: Embedding
-    # tokenizer: Tokenizer
+    dtype: jnp.dtype | None = jnp.bfloat16
+    # @jax.jit
     @nn.compact
     def __call__(self, token_idx_list: Int[Array, 'B S'])->Float[Array, 'B S V']:
-        print(token_idx_list)
-        emebeddings=Embedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
-        x=jnp.stack(emebeddings)
 
+        x=customEmbedding(self.model_config.vocab_length, self.model_config.model_dim)(token_idx_list)
         BlockStack = nn.scan(
             TransformerBlock,
-            variable_axes={"params": 0},   # ← separate params per depth
+            variable_axes={"params": 0},   
             split_rngs={"params": True, "gumbel": True},
             variable_broadcast=False,
             length=self.model_config.transformer_depth,
@@ -86,9 +57,9 @@ class DeepSeekModel(nn.Module):
             mla_config=self.model_config.mla_config,
             model_dim=self.model_config.model_dim,
             moe_ffn_config=self.model_config.moe_ffn_config,
-        )(x)
-        x= nn.Dense(self.model_config.vocab_length)(x)
-        x= nn.softmax(x,axis=-1)
+        )(x,None)
+        x= RMSNorm(self.model_config.model_dim)(x)
+        x= customDense(self.model_config.vocab_length)(x)
         return x
 
 
@@ -106,7 +77,6 @@ def test_transformer_forward():
         num_shared_experts=2,
         num_routing_experts=6,
         num_selected_experts=2,
-        expert_dim=1024,
         activation=Activation.RELU,
         router_type=RouterType.LEARNED
     )
@@ -114,19 +84,18 @@ def test_transformer_forward():
     model_config=ModelConfig(   
         mla_config=mla_config,
         moe_ffn_config=moe_ffn_config,
-        model_dim=1028,
-        transformer_depth=2,
-        latent_dim=8,
-        hidden_dim=4096,
-        num_heads=5, 
-        model_dim=4096,
-        activation= Activation.RELU,
+        model_dim=512,
         transformer_depth=10,
-        vocab_length=10)
-
-    tokenizer= Tokenizer()
+        hidden_dim=128,
+        num_heads=8, 
+        activation= Activation.RELU,
+        vocab_length=32_000)
+    checkpoint_path= Path('/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl')
+    
+    
+    tokenizer = Tokenizer.load_for_inference(checkpoint_path)
     model=DeepSeekModel(model_config=model_config,)
-    input_data= jnp.asarray([1,2,3,4,5])
+    input_data= jnp.asarray(range(10000))
     input_data= jnp.expand_dims(input_data, axis=0)
     key=jax.random.PRNGKey(42)
     variables=model.init({'params': key, 'gumbel': key}, input_data)
