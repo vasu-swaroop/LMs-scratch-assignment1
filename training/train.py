@@ -33,7 +33,8 @@ def cross_entropy_loss(logits: Float[Array, 'B S D'], target: Int[Float, 'B S'])
     # Use log_softmax for numerical stability instead of log(softmax(x))
     log_probs = jax.nn.log_softmax(logits, axis=-1)
     target_one_hot = jax.nn.one_hot(target, logits.shape[-1])
-    loss = -jnp.sum(target_one_hot * log_probs) / (target.shape[0] * target.shape[1])
+    per_token_loss = -jnp.sum(target_one_hot * log_probs, axis=-1)  # (B, S)
+    loss = jnp.mean(per_token_loss)                                 # scalar
     return loss
 
 @dataclass
@@ -256,7 +257,7 @@ class Training():
 
         data_gen = dataset.data_loader()
         val_gen = val_dataset.data_loader() if val_dataset else None
-        steps=[SchedulerPoint(0, 0.0), SchedulerPoint(500, 1e-4), SchedulerPoint(10000, 5e-5), SchedulerPoint(15000, 1e-5)]
+        steps=[SchedulerPoint(0, 0.0), SchedulerPoint(5000, 1e-4), SchedulerPoint(6000, 5e-5), SchedulerPoint(15000, 1e-5)]
         step_scheduler=ChainSchedulers(steps)
         lr=step_scheduler.update(start_step)
 
@@ -326,33 +327,33 @@ if __name__=='__main__':
         latent_dim_kv=16,
         dim_content=512,
         dim_pos=128,
-        num_heads=8,
+        num_heads=16,
     )
     
     moe_ffn_config = MOE_FFN_config(
-        num_shared_experts=2,      # Shared experts (general number = 2)
-        num_routing_experts=2,      # Total routing experts available
-        num_selected_experts=2,     # Top-k selection (selects top 2 out of 6)
-        activation=Activation.LGELU.value,
+        num_shared_experts=1,      # Shared experts (general number = 2)
+        num_routing_experts=1,      # Total routing experts available
+        num_selected_experts=1,     # Top-k selection (selects top 2 out of 6)
+        activation=Activation.LGELU,
         router_type=RouterType.LEARNED
     )
     
     moe_model_config = ModelConfig(
         mla_config=moe_mla_config,
         moe_ffn_config=moe_ffn_config,
-        model_dim=512,
-        transformer_depth=32,
+        model_dim=2048,
+        transformer_depth=4,
         vocab_length=32_000
     )
     
     moe_train_settings = TrainSettings(
         optimizer='adam',
         lr=0.0001,
-        wandb_run_name="causal_masking",
+        wandb_run_name="Assignment model Param in my arch",
         batch_size=2,              # Reduced for stability/OOM
         resume_ckpt=False,
         train_steps=1000000,
-        seq_len=512,
+        seq_len=256,
         prng_key=jax.random.PRNGKey(42),
         data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_train/'),
         val_data_path=Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/TinyStoriesV2_valid/'),

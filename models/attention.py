@@ -126,6 +126,8 @@ class MOE_FFN(nn.Module):
 
     def __call__(self, x:Float[Array, 'B S D'])->Float[Array, 'B S D']:
         shared_out = self.shared_experts(x)
+        
+        # return shared_out[0]
         all_experts = self.routing_experts(x)
 
         logits=self.router(x)
