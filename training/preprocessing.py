@@ -7,9 +7,9 @@ import os
 
 # Configuration
 tokenizer_path = '/data3/vasu/projects/LMs-scratch-assignment1/tokenizer/trained/owt_train/final_0032000_inference.pkl'
-root_data_path = '/data3/vasu/projects/LMs-scratch-assignment1/data/overfiting_100_lines.txt'
-data_set_save_path = Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_tineystoruies_100_lines/')
-num_shards = 1
+root_data_path = '/data3/vasu/projects/LMs-scratch-assignment1/data/owt_train.txt'
+data_set_save_path = Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/owt_train/')
+num_shards = 200
 
 # Load tokenizer
 tokenizer = Tokenizer.load_for_inference(tokenizer_path)

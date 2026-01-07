@@ -3,62 +3,109 @@ from jax import numpy as jnp
 import jax
 from jaxtyping import Float, Array, Int, PRNGKeyArray
 from .schemas import Activation
+from einops import einsum
+from .activations import softmax
+
+def trunc_init(init_key:PRNGKeyArray, weight_shape, dtype=jnp.bfloat16):
+    fan_in, fan_out=weight_shape
+    #Controls variance
+    std=(2/(fan_in+fan_out))**0.5
+    weights=jax.random.truncated_normal(init_key, -3*std,3*std, weight_shape, dtype=dtype) 
+    return weights
+
+class customDense(nn.Module):
+    out_shape: int
+    in_shape: int | None=None
+    dtype: jnp.dtype= jnp.bfloat16
+    @nn.compact
+    def __call__(self,x:Float[Array, 'B ... D_in'])->Float[Array, 'B ... D_out']:
+        if not self.in_shape:
+            in_shape=x.shape[-1]
+        weights=self.param('weight', trunc_init,(in_shape, self.out_shape), dtype=self.dtype)
+        out= jnp.matmul(x, weights)
+        return out
+
+class customEmbedding(nn.Module):
+    vocab_size:int
+    embedding_size:int
+    dtype: jnp.dtype= jnp.bfloat16
+
+    def take_element(self, embed_table, idx):
+        return embed_table.at[idx].get()
+    @nn.compact
+    def __call__(self, x:Int[Array, 'B S'])-> Float[Array, 'B S D']:
+        embed_table=self.param('embed',trunc_init, (self.vocab_size, self.embedding_size), dtype=self.dtype)
+        embeddings= jax.vmap(self.take_element,in_axes=(None,0))(embed_table, x)
+        return embeddings
 
 class FFN(nn.Module):
     weights: list[int]
     activation: Activation
-
-    @nn.compact
-    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False)->Float[Array, 'B ... D_out']:
-        for weight in self.weights[:-1]:
-            x = nn.Dense(weight, use_bias=True)(x)
-            x = self.activation(x)
-        x =nn.Dense(self.weights[-1])(x)
-        if last_layer_act:
-            x=self.activation(x)
-
-        x=RMSNorm()(x)
-        return x
-
+    dtype: jnp.dtype= jnp.bfloat16
+    
     def __post_init__(self):
         super().__post_init__()
         assert len(self.weights) >= 2, "Need input + output layer"
-        assert all(w > 0 for w in self.weights)
+            
+    @nn.compact
+    def __call__(self, x:Float[Array,'B ... D_in'], last_layer_act=False, weight_init_test=True)->Float[Array, 'B ... D_out']:
+        act_func=self.activation.value
+        for i, weight in enumerate(self.weights[:-1]):
+            x = customDense(weight)(x)
+            if self.activation in [Activation.SWIGLU]:
+                act_args={"model_dim":weight, "compact_dim":weight*8//3}
+            else:
+                act_args={}
+            x = act_func(name=f"act_{i}",**act_args)(x)
+        x = customDense(self.weights[-1])(x)
+        if last_layer_act:
+            if self.activation in [Activation.SWIGLU]:
+                act_args={"model_dim":weight, "compact_dim":weight*8//3}
+            else:
+                act_args={}
+            x = act_func(name=f"act_{i}",**act_args)(x)
+        return x
 
 class RMSNorm(nn.Module):
+    d_model: int 
     epsilon: float= 1e-6
+    dtype: jnp.dtype= jnp.bfloat16
 
-    def sqr_sum(self, x):
+    def sqr_sum(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
         return jnp.mean(x**2, axis=-1,keepdims=True)
 
     @nn.compact
-    def __call__(self, x:Float[Array,'B ... D']):
+    def __call__(self, x:Float[Array,'B ... D'])->Float[Array,'B ... D']:
+        gain=self.param('gain',nn.initializers.constant(1), (self.d_model), dtype=self.dtype)
         sq_sum= self.sqr_sum(x)
-        return x / (jnp.sqrt(sq_sum) +self.epsilon)
+        denom=jnp.mean(jnp.sqrt(sq_sum),axis=-1)+self.epsilon
+        return x /denom[...,None] *gain
 
-def similarity_dot_prod(x:Float[Array, 'B ... D'], y:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
-   y=jnp.permute_dims(y, (0,1,3,2))
-
-   return jnp.matmul(x, y)
+def similarity_dot_prod(key:Float[Array, 'B ... D'], query:Float[Array, 'B ... D'])-> Float[Array, 'B ... D D']:
+    return einsum( key, query,'... s1 d,... s2 d -> ... s1 s2',)
 
 
 class pos_to_freq(nn.Module):
     model_dim:int
+    theta: int= 10000
     @nn.compact
     def __call__(self, pos:Int[Array, 'B S']):
+        B, S = pos.shape
         freq=-2*pos/self.model_dim
-        freq= 10000**freq
+        freq= self.theta**freq
         return freq  
 
 class Rope(nn.Module):
     model_dim:int
+    dtype: jnp.dtype= jnp.bfloat16
+
     @nn.compact
     def __call__(self, x:Float[Array, '... D'], pos:Float[Array, 'S'])-> Float[Array, '... D']:        
         pos=pos_to_freq(self.model_dim)(pos)
         pos=pos[:,:,None]
 
-        cos_pos=jnp.cos(pos)
-        sin_pos=jnp.sin(pos)
+        cos_pos=jnp.cos(pos).astype(self.dtype)
+        sin_pos=jnp.sin(pos).astype(self.dtype)
 
         half_dim=x.shape[-1]//2
         even=x[...,:half_dim] # 'B S H D//2' or  B S D//2
@@ -73,19 +120,21 @@ class Rope(nn.Module):
 class Attention(nn.Module):
     hidden_dim: int
     @nn.compact
-    def __call__(self, q:Float[Array, 'B S H D'], k:Float[Array, 'B S H D'], v:Float[Array, 'B S H D'])-> Float[Array, 'B S H D']:
+    def __call__(self, q:Float[Array, '... S D'], k:Float[Array, '... S D'], v:Float[Array, '... S D'], mask:Float[Array, '... S1 S2']=None)-> Float[Array, '... S D']:
         similarity= similarity_dot_prod(q, k)
         similarity= similarity * self.hidden_dim**(-0.5)
-        softmax_scores= nn.softmax(similarity,axis=-1) # B S H D D
-        attention = softmax_scores @ v # B S H D
+        if mask is None:
+            mask=jnp.tril(jnp.ones((q.shape[-2], k.shape[-2])))
+        similarity_masked=jnp.where(mask, similarity, -jnp.inf)
+        softmax_scores = softmax(similarity_masked, axis=-1) # B H S1 S2
+        attention = einsum(softmax_scores, v, '... s1 s2, ... s2 d-> ... s1 d', )
         return attention
-    #TODO: Add masking for causal inference as well
 
 def gumbel_softmax(x:Float[Array, '... D'], key:PRNGKeyArray, temprature:Float=0.1)->Float[Array, '... D']:
     key, subkey=jax.random.split(key)
     gumbel_noise=jax.random.gumbel(subkey, x.shape)
     x=(x+gumbel_noise)/temprature
-    x=nn.softmax(x, axis=-1)
+    x = softmax(x, axis=-1)
     return x, key
     
 def test_attetnion_forward():
@@ -105,6 +154,7 @@ def test_mlp_forward():
     rng=jax.random.PRNGKey(42)
     inp=jnp.ones((1000,128))
     model_var=mlp.init(rng,inp)
+    jax.tree_util.tree_map(lambda x: jnp.zeros_like, model_var['params'])
     inp=jnp.ones((1000,128))
     out=mlp.apply(model_var, inp)     
     print(out.shape)
@@ -120,6 +170,19 @@ def test_rope_forward():
 
     print(out.shape)
 
-if __name__== "__main__":
-    test_rope_forward()
+def test_cutom_dense():
+    rng=jax.random.PRNGKey(3435)
+    inp=jnp.ones((1000,123,128))
+    model=customDense(20)
+    vars_=model.init(rng, inp)
+    _ = model.apply(vars_, inp)
 
+def test_custom_embedding():
+    inp=jnp.ones((1000,128), dtype=jnp.int16)
+    model=customEmbedding(2048, 14043)
+    vars_= model.init(jax.random.PRNGKey(42), inp)
+    out= model.apply(vars_, inp)
+    print(out.shape)
+
+if __name__== "__main__":
+    test_custom_embedding()

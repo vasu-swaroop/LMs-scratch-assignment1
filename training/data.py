@@ -4,7 +4,7 @@ import random
 from joblib import delayed, Parallel
 from jax import numpy as jnp
 
-class Document():
+class Document:
     def __init__(self, document_path):
         self.np_array = np.memmap(
             document_path,
@@ -16,7 +16,7 @@ class Document():
     def sample_text(self, seq_len):
         out_arr = self.np_array[self.cur_pos:self.cur_pos+seq_len]
         # Randomly advance or slightly backtrack to vary the sequence start
-        self.cur_pos += 1
+        self.cur_pos += seq_len
         
         # If we reach the end, reset or pad
         if len(out_arr) < seq_len:
@@ -29,7 +29,7 @@ class Document():
 def sample_text(doc: Document, seq_len: int):
     return doc.sample_text(seq_len)
 
-class Data():
+class Data:
     def __init__(self, root_path: Path, batch_size: int, steps: int, seq_len: int):
         # Only read files with .data extension to avoid hidden files
         all_docs_path = [p for p in root_path.iterdir() if p.suffix == '.data']
@@ -44,7 +44,7 @@ class Data():
         parallel_sequencer = Parallel(n_jobs=-1, backend="threading")
         for step in range(self.steps):
             # We need at least batch_size+1 samples to create input/output pairs
-            num_docs_needed = self.batch_size + 1
+            num_docs_needed = self.batch_size 
             
             if len(self.total_docs_idx) >= num_docs_needed:
                 # Enough documents - sample without replacement
@@ -54,10 +54,10 @@ class Data():
                 chosen_docs = random.choices(list(self.total_docs_idx), k=num_docs_needed)
             
             results = parallel_sequencer(
-                delayed(sample_text)(self.documents[idx], self.seq_len) for idx in chosen_docs
+                delayed(sample_text)(self.documents[idx], self.seq_len+1) for idx in chosen_docs
             )
             results=jnp.array(results)
-            yield results[:-1], results[1:]
+            yield results[:,:-1], results[:,1:]
 
 if __name__ == '__main__':
     in_ = Path('/data3/vasu/projects/LMs-scratch-assignment1/train_data/overfiting_test')

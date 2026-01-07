@@ -2,7 +2,9 @@
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union  
+from jax import numpy as jnp
+import numpy as np
 from .pre_tokenization import PreToken, PreTokenRegistry
 from .tokens import Token, TokenRegistery
 from .token_pair import TokenPairRegistry
@@ -341,3 +343,16 @@ class Tokenizer():
             return [[token.token_idx for token in token_list] for token_list in all_words_tokens]
         else:
             return all_words_tokens
+
+    def tokens_to_text(self, input_data: list[int]|list[Token]):
+        if isinstance(input_data[0], jnp.ndarray):
+            input_data = np.asarray(input_data.astype(int)).flatten()
+            input_data = [self.token_registery.get_token(t).byte_arr for t in input_data]
+        elif isinstance(input_data[0],int):  # noqa: E721
+            input_data = [self.token_registery.get_token(t).byte_arr for t in input_data]
+        else:
+            input_data = [t.byte_arr for t in input_data]
+        decoded = b''.join(input_data)
+        decoded = decoded.decode('utf-8', errors='replace')
+        
+        return decoded
